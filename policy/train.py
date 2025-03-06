@@ -62,6 +62,7 @@ class PPOTrainer():
         self.test_dataset=test_data
         self.tokenizer=tokenizer
         self.device=device
+        self.args=args
 
         if self.tokenizer.unk_token is None:
             self.tokenizer.unk_token = self.tokenizer.pad_token
@@ -82,6 +83,7 @@ class PPOTrainer():
         self.cliprange_value = 0.05
         self.best_reward = float('-inf')
         self.warmup_ratio=0.0
+        
 
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
@@ -279,6 +281,8 @@ class PPOTrainer():
                 self.best_reward = test_reward
                 self.save_checkpoint("best_model")
                 print(f"New best model with reward: {test_reward:.4f}")
+
+        wandb.finish()
 
 
         
@@ -614,7 +618,7 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device="cpu"
     print(f"device:{device}")
-    train_dataset=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(12)
+    train_dataset=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(1)
 
 
     test_dataset=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).take(4)
@@ -625,13 +629,13 @@ def train(args):
     tokenizer=AutoTokenizer.from_pretrained(pretrain_path)
     tokenizer.padding_side='left'
 
-    # bnb_config = BitsAndBytesConfig(
-    #     load_in_8bit=False,  # 不使用8bit
-    #     load_in_4bit=False,  # 不使用4bit
-    #     load_in_2bit=True,   # 启用 2-bit 量化
-    #     bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
-    #     bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
-    # )
+    bnb_config = BitsAndBytesConfig(
+        load_in_8bit=False,  # 不使用8bit
+        load_in_4bit=False,  # 不使用4bit
+        load_in_2bit=True,   # 启用 2-bit 量化
+        bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
+        bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
+    )
 
 
     # 设置 LoRA 配置
@@ -645,11 +649,11 @@ def train(args):
     )
 
 
-    policy=PolicyModel(pretrain_path,lora_config,bnb_config=None)
+    policy=PolicyModel(pretrain_path,lora_config,bnb_config=bnb_config)
     # policy = get_peft_model(policy,lora_config)
-    value=ValueModel(pretrain_path,lora_config,bnb_config=None)
+    value=ValueModel(pretrain_path,lora_config,bnb_config=bnb_config)
     # value = get_peft_model(value,lora_config)
-    rm=RewardModel(pretrain_path,lora_config,bnb_config=None)
+    rm=RewardModel(pretrain_path,lora_config,bnb_config=bnb_config)
     # rm = get_peft_model(rm,lora_config)
 
 
@@ -663,8 +667,8 @@ def train(args):
     train_dataset=data_prepare(tokenizer,train_dataset,device)
     test_dataset=data_prepare(tokenizer,test_dataset,device)
 
-    train_dataloader=DataLoader(dataset=CustomDataset(train_dataset),shuffle=True,batch_size=2)
-    test_dataloader=DataLoader(dataset=CustomDataset(test_dataset),shuffle=False,batch_size=2)
+    train_dataloader=DataLoader(dataset=CustomDataset(train_dataset),shuffle=True,batch_size=1)
+    test_dataloader=DataLoader(dataset=CustomDataset(test_dataset),shuffle=False,batch_size=1)
 
 
     ppo=PPOTrainer(policy_model=policy,value_model=value,reward_model=rm,

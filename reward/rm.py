@@ -5,7 +5,7 @@ from transformers import get_scheduler,AutoTokenizer,PreTrainedModel,AutoModel,A
 from peft import get_peft_model
 
 class RewardModel(Qwen2PreTrainedModel):
-    def __init__(self, pretrain_path,lora_config,bnb_config=None):
+    def __init__(self, pretrain_path,lora_config=None,bnb_config=None):
         config=AutoConfig.from_pretrained(pretrain_path)
         super(RewardModel, self).__init__(config)
         self.config = config
@@ -13,13 +13,13 @@ class RewardModel(Qwen2PreTrainedModel):
             self.model = AutoModelForCausalLM.from_pretrained(pretrain_path,quantization_config=bnb_config)
         else:
             self.model = AutoModelForCausalLM.from_pretrained(pretrain_path)
-        self.model=get_peft_model(self.model,lora_config)
+        if lora_config:
+            self.model=get_peft_model(self.model,lora_config)
 
         # 获取模型的 dtype
         model_dtype = next(self.model.parameters()).dtype
         # 初始化 Linear 层，并设置相同的 dtype
         self.linear = nn.Linear(config.hidden_size, 1).to(model_dtype)
-
         self.sigmoid = nn.Sigmoid()
         self.loss_fn = nn.MSELoss()
 

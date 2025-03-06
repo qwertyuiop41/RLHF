@@ -1,3 +1,5 @@
 reward/ckpt
 __pycache__
 policy/test.py
+outputs
+wandb
