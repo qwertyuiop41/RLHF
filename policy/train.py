@@ -1,0 +1,541 @@
+import argparse
+import re
+import time
+import torch
+import torch.nn as nn
+from torch.utils.data import  DataLoader,Dataset
+
+from transformers import get_scheduler,AutoTokenizer,PreTrainedModel,AutoModel,AutoModelForCausalLM, BertPreTrainedModel,Qwen2PreTrainedModel,Qwen2Model,DataCollatorWithPadding,BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model
+
+from datasets import load_dataset
+import wandb
+
+
+from copy import deepcopy
+from dataclasses import dataclass
+import inspect
+import json
+import os
+from typing import Dict, Iterator, List, Optional, Sequence, Union, Iterable
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+import math
+import gc
+from datasets import dataset_dict, load_from_disk
+
+from tqdm import tqdm, trange
+from transformers import (
+    CONFIG_MAPPING,
+    MODEL_MAPPING,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    SchedulerType,
+    default_data_collator,
+    get_scheduler,
+    LlamaForCausalLM,
+    GPT2Tokenizer,
+    GPT2Model,
+    Qwen2Config
+)
+
+
+import sys
+sys.path.append("/home/wsy/NLP/RL")
+
+from RLHF.policy.policy import PolicyModel
+from RLHF.policy.value import ValueModel
+from RLHF.reward.rm import RewardModel
+
+
+class PPOTrainer():
+    def __init__(self,policy_model,value_model,reward_model,train_data,test_data,train_dataloader,test_dataloader,tokenizer,device):
+        self.policy_model=policy_model.to(device)
+        self.value_model=value_model.to(device)
+        self.ref_model=deepcopy(self.policy_model).to(device)
+        self.reward_model=reward_model.to(device)
+        self.train_dataset=train_data
+        self.train_dataloader=train_dataloader
+        self.test_dataloader=test_dataloader
+        self.test_dataset=test_data
+        self.tokenizer=tokenizer
+        self.device=device
+
+        if self.tokenizer.unk_token is None:
+            self.tokenizer.unk_token = self.tokenizer.pad_token
+        
+        self.max_answer_seq_len=512
+        self.n_updates_per_iteration = 5
+        self.clip = 0.2 # As recommended by the paper
+        self.lr=0.001
+        self.save_freq=10
+        self.gamma = 0.95 
+        self.epoch=1
+        self.kl_ctl=0.1
+        self.clip_reward_value = 5
+        self.batch_size=1
+        self.reward_mode="model"  #{"model","rule"}
+        self.lam = 0.9
+        self.cliprange = 0.05
+        self.cliprange_value = 0.05
+
+
+        max_train_steps = 10 * len(self.train_dataloader)
+        warm_steps = int(0.0 * max_train_steps)
+
+
+        no_decay = ["bias", "LayerNorm.weight"]
+        self.policy_optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in self.policy_model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": 0.01,
+            },
+            {
+                "params": [p for n, p in self.policy_model.named_parameters() if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+            },
+        ]
+        self.policy_optimizer = torch.optim.AdamW(self.policy_optimizer_grouped_parameters, lr=self.lr)
+
+        
+        self.policy_lr_scheduler = get_scheduler(
+            name='linear',
+            optimizer=self.policy_optimizer,
+            num_warmup_steps=warm_steps,
+            num_training_steps=max_train_steps,
+        )
+
+
+        self.value_optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in self.value_model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": 0.01,
+            },
+            {
+                "params": [p for n, p in self.value_model.named_parameters() if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+            },
+        ]
+        self.value_optimizer = torch.optim.AdamW(self.value_optimizer_grouped_parameters, lr=self.lr)
+
+
+        self.value_lr_scheduler = get_scheduler(
+            name='linear',
+            optimizer=self.value_optimizer,
+            num_warmup_steps=warm_steps,
+            num_training_steps=max_train_steps,
+        )
+
+
+
+
+        self.policy_optimizer=torch.optim.Adam(self.policy_model.parameters(),lr=self.lr)
+        self.value_optimizer=torch.optim.Adam(self.value_model.parameters(),lr=self.lr)
+
+    def learn(self):
+        """
+        epoch轮学习
+        """
+        print("==============ppo learn==============")
+        self.policy_model.train()
+        for i in range(self.epoch):
+            pbar = tqdm(
+                self.train_dataloader,
+                desc=f"Train epoch [{i + 1}/{self.epoch}]",
+            )
+            policy_loss_sum, value_loss_sum, unsup_loss_sum = 0, 0, 0
+            self.policy_optimizer.zero_grad()
+            self.value_optimizer.zero_grad()
+            for batch in pbar:
+                # batch.to(self.device)
+                pad_token_id = self.tokenizer.pad_token_id
+                input_ids=batch["input_ids"]
+                prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
+
+
+                    
+                
+
+
+                with torch.no_grad():
+                    # print(batch)
+                    print(self.tokenizer.pad_token_id)
+                    print(batch)
+                    sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
+                    
+                    # exit(0)
+                    try:
+                        seq = self.policy_model.model.generate(
+                            batch["input_ids"],
+                            attention_mask=batch["attention_mask"],
+                            max_length=self.max_answer_seq_len,
+                            pad_token_id=self.tokenizer.pad_token_id,
+                            )
+                            
+                    except RuntimeError as e:
+                        # if "probability tensor contains" in str(e):
+                        #     # 打印输入张量的关键信息
+                        #     print("="*50 + " ERROR INPUT ANALYSIS " + "="*50)
+                        #     print(f"Error message: {str(e)}")
+                        #     print("\n[input_ids]")
+                        #     print("Shape:", batch["input_ids"].shape)
+                        #     print("Min/Mean/Max:", batch["input_ids"].min().item(), batch["input_ids"].float().mean().item(), batch["input_ids"].max().item())
+                        #     print("NaN count:", torch.isnan(batch["input_ids"]).sum().item())
+                        #     print("Inf count:", torch.isinf(batch["input_ids"]).sum().item())
+                        #     print("Sample values:\n", batch["input_ids"][:2, :10])  # 打印前2个样本的前10个token
+                            
+                        #     print("\n[attention_mask]")
+                        #     print("Shape:", batch["attention_mask"].shape)
+                        #     print("Min/Mean/Max:", batch["attention_mask"].min().item(), batch["attention_mask"].float().mean().item(), batch["attention_mask"].max().item())
+                        #     print("NaN count:", torch.isnan(batch["attention_mask"]).sum().item())
+                        #     print("Inf count:", torch.isinf(batch["attention_mask"]).sum().item())
+                        #     print("Sample values:\n", batch["attention_mask"][:2, :10])  # 打印前2个样本的前10个位置
+                            
+                        #     # 建议调试步骤
+                        #     print("\n" + "="*50 + " SUGGESTED ACTIONS " + "="*50)
+                        #     print("1. 检查 input_ids 是否包含超出词表范围的token（词表大小={})".format(self.tokenizer.vocab_size))
+                        #     print("2. 检查模型参数是否有 NaN/Inf: for param in model.parameters(): print(torch.isnan(param).any())")
+                        #     print("3. 尝试添加生成参数: temperature=0.7, top_k=50")
+                        #     print("4. 缩小输入长度测试: max_length=32")
+                        raise  # 重新抛出异常以中断程序
+                                            
+                    seq_mask = seq.not_equal(pad_token_id).long()
+                
+                    outputs=self.policy_model(seq, attention_mask=seq_mask)
+                    outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
+                    rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask)
+                    # values 估计的是当前 token 未来的累积奖励,所以不需要最后一个
+                    # 评论模型 critic_model 返回结果维度是(B,L)，L 维度上第 i 个位置代表从 i 位置到最后的累积奖励，用于辅助评估策略的好坏，舍去最后一个位置的 token
+                    # 价值函数  V(t) 是基于当前状态评估未来的期望回报，但最后一个 token 通常没有后续的未来信息，因此它的价值估计没有意义。
+                    # 而且生成任务是自回归的，序列的最后一个 token 不会为后续步骤提供任何预测依据，因为生成已经结束。
+                    values=self.value_model(seq,attention_mask=seq_mask)[:, :-1]
+
+                logits = outputs.logits
+                logits_ref = outputs_ref.logits
+
+
+                experience={
+                    'prompts': input_ids,
+                    'logprobs': gather_log_probs(logits[:, :-1, :], seq[:, 1:]),
+                    'ref_logprobs': gather_log_probs(logits_ref[:, :-1, :], seq[:,1:]),
+                    'value': values,
+                    'rewards': rwd_score,
+                    'input_ids': seq,
+                    "attention_mask": seq_mask,
+                }
+
+                policy_loss, value_loss=self.step(experience=experience)
+                policy_loss_sum += policy_loss.item()
+                value_loss_sum += value_loss.item()
+
+
+
+        
+
+    def step(self,experience):
+        """
+        一轮学习，调用model
+        """
+          # train the rlhf mode here
+        ### process the old outputs
+        prompts = experience['prompts']
+        log_probs = experience['logprobs']
+        ref_log_probs = experience['ref_logprobs']
+        reward_score = experience['rewards']
+        values = experience['value']
+        attention_mask = experience['attention_mask']
+        seq = experience['input_ids']
+
+        print(seq.shape)
+
+
+        start = prompts.size()[-1] - 1
+        # # #因为第一个token是输入
+        # action_mask = attention_mask[:, 1:]
+
+        old_values = values
+
+        old_values=old_values.squeeze(dim=2)
+
+        
+        with torch.no_grad():
+            old_rewards = self.compute_rwd(prompts, log_probs,
+                                               ref_log_probs, reward_score,
+                                               attention_mask)
+            # 确保只有生成部分的有效 token 参与训练，忽略 padding 部分。
+            ends = start +attention_mask[:, start+1:].sum(1)-1
+
+            for i in range(old_rewards.shape[0]):
+                old_rewards[i, ends[i]:] = 0
+                old_values[i, ends[i]:] = 0
+            advantages, returns = self.compute_adv(
+                old_values, old_rewards, start)
+
+        action_mask = attention_mask[:, 1:]
+        batch = {'input_ids': seq, "attention_mask": attention_mask}
+        policy_prob = self.policy_model(**batch).logits
+        policy_log_prob = gather_log_probs(policy_prob[:, :-1, :], seq[:, 1:])
+        policy_loss = self.policy_loss_fn(policy_log_prob[:, start:],
+                                        log_probs[:, start:], advantages,
+                                        action_mask[:, start:])
+        
+        print(policy_loss)
+        # policy_loss.backward()
+        # # self.policy_model.backward(policy_loss)
+        self.policy_optimizer.step()
+        self.policy_lr_scheduler.step()
+
+
+        value = self.value_model(**batch)[:, :-1]
+        value=value.squeeze(dim=2)
+        print(value.shape)
+        value_loss = self.value_loss_fn(value[:, start:], old_values[:,start:],
+                                        
+                                          returns, action_mask[:, start:])
+        # self.value_model.backward(value_loss)
+        # value_loss.backward()
+        self.value_optimizer.step()
+        self.value_lr_scheduler.step()
+
+        self.policy_optimizer.zero_grad()
+        self.value_optimizer.zero_grad()
+
+        return policy_loss, value_loss
+
+        
+
+
+
+    def compute_reward_score(self,seq,attention_mask):
+        """
+        prompt+outputs调用reward model
+        """
+        rwd_score=0
+        if self.reward_mode=="model":
+
+            rwd_score=self.reward_model(seq,attention_mask=attention_mask)
+                            
+        elif self.reward_mode=="rule":
+            gt=input["label"]
+            if seq==gt:
+                rwd_score=1.0
+            else:
+                rwd_score=0.0
+            rwd_score=1.0
+        return rwd_score
+    
+
+
+    def compute_rwd(self, prompts, log_probs, ref_log_probs, reward_score,action_mask):
+        print("=============compute rewards================")
+
+        kl_divergence_estimate = -self.kl_ctl * (log_probs - ref_log_probs)
+        rewards = kl_divergence_estimate
+        start = prompts.shape[1] - 1
+        ends = start +action_mask[:, start+1:].sum(1)-1
+        reward_clip = torch.clamp(reward_score, -self.clip_reward_value,
+                                  self.clip_reward_value)
+        batch_size = log_probs.shape[0]
+        print(start)
+        print(action_mask)
+        print(rewards.shape)
+        print(ends)
+        # print(rewards)
+        print(reward_clip)
+         # 在L维度上，答案部分每个位置都有KL散度，但是只在最后一个位置加上奖励值
+        for j in range(batch_size):
+            print(rewards[j, ends[j]])
+            print(reward_clip[j])
+            rewards[j, ends[j]] += reward_clip[j][-1]
+
+        return rewards
+    
+
+    def compute_adv(self, values, rewards, start):
+        print("================compute adavantage================")
+        # https://huggingface.co/blog/deep-rl-a2c
+        # values（B，L） critic_model 输出，包含每个 token 上的评分
+        print(values.shape)
+        # rewards（B，L）reward_model 输出包含了kl散度以及最后一个有效答案 token 的奖励值
+        print(rewards.shape)
+        # start 是 answer 开始的位置
+        lastgaelam = 0
+        advantages_reversed = []
+        length = rewards.size()[-1]
+        # 因为最后时刻的未来value=0
+        for t in reversed(range(start, length)):
+            nextvalues = values[:, t + 1] if t < length - 1 else 0.0
+            delta = rewards[:, t] + self.gamma * nextvalues - values[:, t]
+            # self.gamma=1，self.lam=0.95是衰减因子，表示之前计算的delta对现在影响越来越小，衡量某个动作相对于基准的好坏程度，使用 GAE 平滑计算
+            # 这种设计能够使优化既关注当前的即时奖励，又能兼顾未来的长期收益，从而提升整体性能。降低可能因为单步的随机奖励导致估计偏差较大的风险
+            # GAE：多步优势估计，当前时刻的优势值 At依赖于未来所有时刻的TD误差δ并通过 γ λ 衰减因子对远期误差进行加权。
+            # ​γ：折扣因子，控制未来奖励的重要性。
+            lastgaelam = delta + self.gamma * self.lam * lastgaelam
+            advantages_reversed.append(lastgaelam)
+        # 将结果进行反序，也就是扭成正常从左到右的顺序，再进行 stack 组合
+        advantages = torch.stack(advantages_reversed[::-1], dim=1)
+        # 优势加 values 中有效答案开始后的价值估计得到回报 returns ，后续用来更新 critic_model 
+        returns = advantages + values[:, start:]
+
+        return advantages.detach(), returns # (B, start:length)
+
+
+
+
+    def policy_loss_fn(self, logprobs, old_logprobs, advantages, mask):
+        ## policy gradient loss
+        log_ratio = (logprobs - old_logprobs) * mask
+        ratio = torch.exp(log_ratio)
+        pg_loss1 = -advantages * ratio
+        pg_loss2 = -advantages * torch.clamp(ratio, 1.0 - self.cliprange,
+                                             1.0 + self.cliprange)
+        pg_loss = torch.sum(torch.max(pg_loss1, pg_loss2) * mask) / mask.sum()
+        return pg_loss
+    
+
+
+    def value_loss_fn(self, values, old_values, returns, mask):
+        print("=========value loss=========")
+        ## value loss
+        ## value loss 需要注意的是这里使用裁剪的“老critic_model”的输出约束“新critic_model”不要步子太大。
+        print(values.shape)
+        print(old_values.shape)
+        values_clipped = torch.clamp(
+            values,
+            old_values - self.cliprange_value,
+            old_values + self.cliprange_value,
+        )
+        values = values.float()
+        values_clipped = values_clipped.float()
+        vf_loss1 = (values - returns)**2
+        vf_loss2 = (values_clipped - returns)**2
+        vf_loss = 0.5 * torch.sum(
+            torch.max(vf_loss1, vf_loss2) * mask) / mask.sum()
+        return vf_loss
+    
+
+
+
+class CustomDataset(Dataset):               
+    def __init__(self, sample):
+        super(CustomDataset, self).__init__()
+        self.sample = sample
+
+    def __getitem__(self, item):
+        res = {k: v[item] for k, v in self.sample.items()}
+        return res
+
+    def __len__(self):
+        return len(self.sample['input_ids'])
+    
+def data_prepare(tokenizer,data_lst,device):
+    question_lst=[data[0]["content"]for data in data_lst["prompt"]]
+
+    gt_lst=[data["ground_truth"]for data in data_lst["reward_model"]]
+
+    train_data = tokenizer.batch_encode_plus(question_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt').to(device) 
+    label_data = tokenizer.batch_encode_plus(gt_lst, max_length=512, padding="longest", truncation=True, return_tensors='pt').to(device) 
+
+    # train_data = tokenizer.batch_encode_plus(question_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt')
+    # label_data = tokenizer.batch_encode_plus(gt_lst, max_length=512, padding="longest", truncation=True, return_tensors='pt') 
+    # train_data["labels"] = label_data["input_ids"]
+
+    # train_data={key: value.tolist() for key, value in train_data.items()}
+    # train_data = Dataset.from_dict(train_data)
+
+    return train_data
+
+def gather_log_probs(logits, labels):
+    """
+    获得seq_ids的概率
+    """
+    log_probs = F.log_softmax(logits, dim=-1)
+    log_probs_labels = log_probs.gather(dim=-1, index=labels.unsqueeze(-1))
+    return log_probs_labels.squeeze(-1)
+
+
+
+def sanitize_input_ids(tokenizer,input_ids, vocab_size):
+    # 将超出词表的Token替换为<unk>
+    input_ids[input_ids >= vocab_size] = tokenizer.unk_token_id
+    return input_ids
+
+def train(pretrain_path,train_path,test_path):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device="cpu"
+    print(f"device:{device}")
+    train_dataset=load_dataset("parquet", data_files=train_path,split='train').shuffle(seed=42).select(range(12))
+    test_dataset=load_dataset("parquet", data_files=test_path,split='train').shuffle(seed=42).select(range(4))
+
+
+    
+    tokenizer=AutoTokenizer.from_pretrained(pretrain_path)
+    tokenizer.padding_side='left'
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_8bit=False,  # 不使用8bit
+        load_in_4bit=False,  # 不使用4bit
+        load_in_2bit=True,   # ✅ 启用 2-bit 量化
+        bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
+        bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
+    )
+
+
+    # 设置 LoRA 配置
+    lora_config = LoraConfig(
+        r=1,  # Rank，越大表示 LoRA 层越大，消耗显存更多
+        lora_alpha=8,  # LoRA scaling factor
+        lora_dropout=0.1,  # Dropout 防止过拟合
+        target_modules=["q_proj", "v_proj"],  # 只训练注意力层
+        bias="none",
+        # task_type="CAUSAL_LM"  # 适用于自回归（decoder-only）模型，如 Qwen
+    )
+
+
+    policy=PolicyModel(pretrain_path,lora_config,bnb_config)
+    # policy = get_peft_model(policy,lora_config)
+    value=ValueModel(pretrain_path,lora_config,bnb_config)
+    # value = get_peft_model(value,lora_config)
+    rm=RewardModel(pretrain_path,lora_config,bnb_config)
+    # rm = get_peft_model(rm,lora_config)
+
+
+
+
+
+    # policy=PolicyModel(config)
+    # value=PolicyModel(config)
+    # rm=RewardModel(config)
+
+    train_dataset=data_prepare(tokenizer,train_dataset,device)
+    test_dataset=data_prepare(tokenizer,test_dataset,device)
+
+    train_dataloader=DataLoader(dataset=CustomDataset(train_dataset),shuffle=True,batch_size=2)
+    test_dataloader=DataLoader(dataset=CustomDataset(test_dataset),shuffle=False,batch_size=2)
+
+
+    ppo=PPOTrainer(policy_model=policy,value_model=value,reward_model=rm,
+    train_data=train_dataset,test_data=test_dataset,train_dataloader=train_dataloader,test_dataloader=test_dataloader,tokenizer=tokenizer,device=device)
+    ppo.learn()
+
+
+    
+
+    
+
+
+if __name__=="__main__":
+    parser = argparse.ArgumentParser()
+
+    
+
+    # Models
+    parser.add_argument("--pretrain", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
+    # Dataset
+    parser.add_argument("--train_dataset_path",default='/home/wsy/NLP/RL/RLHF/datatset/spider/train.parquet')
+    parser.add_argument("--test_dataset_path", default='/home/wsy/NLP/RL/RLHF/datatset/spider/test.parquet')
+    args=parser.parse_args()
+
+    train(pretrain_path=args.pretrain,train_path=args.train_dataset_path,test_path=args.test_dataset_path)
