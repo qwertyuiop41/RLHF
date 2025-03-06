@@ -5,11 +5,14 @@ from transformers import get_scheduler,AutoTokenizer,PreTrainedModel,AutoModel,A
 from peft import get_peft_model
 
 class RewardModel(Qwen2PreTrainedModel):
-    def __init__(self, pretrain_path,lora_config,bnb_config):
+    def __init__(self, pretrain_path,lora_config,bnb_config=None):
         config=AutoConfig.from_pretrained(pretrain_path)
         super(RewardModel, self).__init__(config)
         self.config = config
-        self.model = AutoModelForCausalLM.from_pretrained(pretrain_path,quantization_config=bnb_config)
+        if bnb_config:
+            self.model = AutoModelForCausalLM.from_pretrained(pretrain_path,quantization_config=bnb_config)
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(pretrain_path)
         self.model=get_peft_model(self.model,lora_config)
 
         # 获取模型的 dtype
