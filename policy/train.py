@@ -185,7 +185,11 @@ class PPOTrainer():
             self.policy_optimizer.zero_grad()
             self.value_optimizer.zero_grad()
             for batch in pbar:
-                # batch.to(self.device)
+                # 将数据移到相应设备
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch[k] = v.to(self.device)
+                        
                 pad_token_id = self.tokenizer.pad_token_id
                 input_ids=batch["input_ids"]
                 prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
