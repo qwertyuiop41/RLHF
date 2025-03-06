@@ -81,8 +81,7 @@ class PPOTrainer():
         self.cliprange = 0.05
         self.cliprange_value = 0.05
         self.best_reward = float('-inf')
-        
-
+        self.warmup_ratio=0.0
 
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
@@ -115,9 +114,8 @@ class PPOTrainer():
 
 
 
-
-        max_train_steps = 10 * len(self.train_dataloader)
-        warm_steps = int(0.0 * max_train_steps)
+        max_train_steps = self.epoch * len(self.train_dataloader)
+        warm_steps = int(self.warmup_ratio * max_train_steps)
 
 
         no_decay = ["bias", "LayerNorm.weight"]
