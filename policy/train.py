@@ -50,6 +50,8 @@ from RLHF.policy.value import ValueModel
 from RLHF.reward.rm import RewardModel
 
 
+
+
 class PPOTrainer():
     def __init__(self,policy_model,value_model,reward_model,train_data,test_data,train_dataloader,test_dataloader,tokenizer,device,args):
         self.policy_model=policy_model.to(device)
@@ -166,9 +168,62 @@ class PPOTrainer():
         self.policy_optimizer=torch.optim.Adam(self.policy_model.parameters(),lr=self.lr)
         self.value_optimizer=torch.optim.Adam(self.value_model.parameters(),lr=self.lr)
 
+    def generate_experience(self):
+        pbar = tqdm(
+            self.train_dataloader,
+            desc=f"Experience",
+        )
+        experiences=[]
+        for batch in pbar:
+            # 将数据移到相应设备
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch[k] = v.to(self.device)
+                    
+            pad_token_id = self.tokenizer.pad_token_id
+            input_ids=batch["input_ids"]
+            prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
 
+            with torch.no_grad():
+                
+                # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
 
+                seq = self.policy_model.model.generate(
+                    batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    max_length=self.max_answer_seq_len,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    )
+
+                                        
+                seq_mask = seq.not_equal(pad_token_id).long()
             
+                outputs=self.policy_model(seq, attention_mask=seq_mask)
+                outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
+                rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask)
+                # values 估计的是当前 token 未来的累积奖励,所以不需要最后一个
+                # 评论模型 critic_model 返回结果维度是(B,L)，L 维度上第 i 个位置代表从 i 位置到最后的累积奖励，用于辅助评估策略的好坏，舍去最后一个位置的 token
+                # 价值函数  V(t) 是基于当前状态评估未来的期望回报，但最后一个 token 通常没有后续的未来信息，因此它的价值估计没有意义。
+                # 而且生成任务是自回归的，序列的最后一个 token 不会为后续步骤提供任何预测依据，因为生成已经结束。
+                values=self.value_model(seq,attention_mask=seq_mask)[:, :-1]
+
+            logits = outputs.logits
+            logits_ref = outputs_ref.logits
+
+
+            experience={
+                'prompts': input_ids,
+                'logprobs': gather_log_probs(logits[:, :-1, :], seq[:, 1:]),
+                'ref_logprobs': gather_log_probs(logits_ref[:, :-1, :], seq[:,1:]),
+                'value': values,
+                'rewards': rwd_score,
+                'input_ids': seq,
+                "attention_mask": seq_mask,
+            }
+            experiences.append(experience)
+        return experiences
+
+
 
     def learn(self):
         """
@@ -178,61 +233,19 @@ class PPOTrainer():
         self.policy_model.train()
         self.value_model.train()
         for i in range(self.epoch):
+            # TODO 也不用整个train loader的experience一次性传入，可以一部分一部分的传入
+            experiences=self.generate_experience()
             pbar = tqdm(
-                self.train_dataloader,
+                experiences,
                 desc=f"Train epoch [{i + 1}/{self.epoch}]",
             )
             policy_loss_sum, value_loss_sum, reward_sum = 0, 0, 0
             batch_count = 0
             self.policy_optimizer.zero_grad()
             self.value_optimizer.zero_grad()
-            for batch in pbar:
-                # 将数据移到相应设备
-                for k, v in batch.items():
-                    if isinstance(v, torch.Tensor):
-                        batch[k] = v.to(self.device)
-                        
-                pad_token_id = self.tokenizer.pad_token_id
-                input_ids=batch["input_ids"]
-                prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
-
-                with torch.no_grad():
-                    
-                    # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
-
-                    seq = self.policy_model.model.generate(
-                        batch["input_ids"],
-                        attention_mask=batch["attention_mask"],
-                        max_length=self.max_answer_seq_len,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        )
-
-                                            
-                    seq_mask = seq.not_equal(pad_token_id).long()
-                
-                    outputs=self.policy_model(seq, attention_mask=seq_mask)
-                    outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
-                    rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask)
-                    # values 估计的是当前 token 未来的累积奖励,所以不需要最后一个
-                    # 评论模型 critic_model 返回结果维度是(B,L)，L 维度上第 i 个位置代表从 i 位置到最后的累积奖励，用于辅助评估策略的好坏，舍去最后一个位置的 token
-                    # 价值函数  V(t) 是基于当前状态评估未来的期望回报，但最后一个 token 通常没有后续的未来信息，因此它的价值估计没有意义。
-                    # 而且生成任务是自回归的，序列的最后一个 token 不会为后续步骤提供任何预测依据，因为生成已经结束。
-                    values=self.value_model(seq,attention_mask=seq_mask)[:, :-1]
-
-                logits = outputs.logits
-                logits_ref = outputs_ref.logits
-
-
-                experience={
-                    'prompts': input_ids,
-                    'logprobs': gather_log_probs(logits[:, :-1, :], seq[:, 1:]),
-                    'ref_logprobs': gather_log_probs(logits_ref[:, :-1, :], seq[:,1:]),
-                    'value': values,
-                    'rewards': rwd_score,
-                    'input_ids': seq,
-                    "attention_mask": seq_mask,
-                }
-
+            
+            for experience in pbar:
+                rwd_score=experience["rewards"]
                 policy_loss, value_loss, rwd=self.step(experience=experience)
                 policy_loss_sum += policy_loss.item()
                 value_loss_sum += value_loss.item()
@@ -594,10 +607,16 @@ def data_prepare(tokenizer,data_lst,device):
 
 def gather_log_probs(logits, labels):
     """
-    获得seq_ids的概率
+    获得label的对数概率
     """
+    # print(f"logprob:{logits}")
     log_probs = F.log_softmax(logits, dim=-1)
+    # print(f"logprob:{log_probs}")
     log_probs_labels = log_probs.gather(dim=-1, index=labels.unsqueeze(-1))
+    # print(f"labels:{labels}")
+    # print(labels.unsqueeze(-1))
+    # print(f"loglabels:{log_probs_labels}")
+    # exit()
     return log_probs_labels.squeeze(-1)
 
 
@@ -618,7 +637,7 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device="cpu"
     print(f"device:{device}")
-    train_dataset=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(1)
+    train_dataset=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(2)
 
 
     test_dataset=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).take(4)
