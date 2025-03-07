@@ -20,6 +20,7 @@ class RewardModel(Qwen2PreTrainedModel):
         model_dtype = next(self.model.parameters()).dtype
         # 初始化 Linear 层，并设置相同的 dtype
         self.linear = nn.Linear(config.hidden_size, 1).to(model_dtype)
+        # 把分数压缩到（0，1）
         self.sigmoid = nn.Sigmoid()
         self.loss_fn = nn.MSELoss()
 
@@ -28,17 +29,20 @@ class RewardModel(Qwen2PreTrainedModel):
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.model(input_ids=input_ids,
                              attention_mask=attention_mask,output_hidden_states=True).hidden_states[-1]
-        # print(outputs)
-        # print(outputs[-1])
 
         output = self.linear(outputs)
         logits = self.sigmoid(output)
         batch_indices = torch.arange(logits.shape[0])  # 生成 batch 索引
+        # reward应该取最后一位token对应的分数
         last_rewards = logits[batch_indices, -1]  # 获取对应的 reward
         # logits=logits[:,-1]
         # print(f"reward score:{last_rewards}")
+        # print(input_ids)
+        # print(logits)
+        print(labels)
+        print(last_rewards)
         if labels is not None:
-            loss = self.loss_fn(logits, labels)
+            loss = self.loss_fn(last_rewards, labels)
             return last_rewards, loss
         else:
             return last_rewards
@@ -47,15 +51,23 @@ class RewardModel(Qwen2PreTrainedModel):
 
 
 class RankRewardModel(Qwen2PreTrainedModel):
-    def __init__(self, config):
+    def __init__(self, pretrain_path,lora_config=None,bnb_config=None):
+        config=AutoConfig.from_pretrained(pretrain_path)
         super(RankRewardModel, self).__init__(config)
         self.config = config
-        self.model = Qwen2Model(config)
+        # self.model = Qwen2Model(config)
+        if bnb_config:
+            self.model = AutoModelForCausalLM.from_pretrained(pretrain_path,quantization_config=bnb_config)
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(pretrain_path)
+        if lora_config:
+            self.model=get_peft_model(self.model,lora_config)
         self.linear = nn.Linear(config.hidden_size, 1)
 
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.model(input_ids=input_ids,
-                             attention_mask=attention_mask).last_hidden_state
+                             attention_mask=attention_mask,
+                             output_hidden_states=True).hidden_states[-1]
         # TODO reward应该取最后一位token对应的分数
         # reward = self.linear(outputs).mean(dim=1) 
         reward=self.linear(outputs)[0][-1]
