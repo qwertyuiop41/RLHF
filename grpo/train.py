@@ -467,7 +467,7 @@ class GRPOTrainer():
 
 
 
-    def evaluete(self):
+    def evaluate(self):
         """
         评估当前policy的效果
         """
