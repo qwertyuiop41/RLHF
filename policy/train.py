@@ -56,6 +56,7 @@ class PPOTrainer():
     def __init__(self,policy_model,value_model,reward_model,train_data,test_data,train_dataloader,test_dataloader,tokenizer,device,args):
         self.policy_model=policy_model.to(device)
         self.value_model=value_model.to(device)
+        # 不会变的 记住sft之后的内容
         self.ref_model=deepcopy(self.policy_model).to(device)
         self.reward_model=reward_model.to(device)
         self.train_dataset=train_data
@@ -169,6 +170,10 @@ class PPOTrainer():
         self.value_optimizer=torch.optim.Adam(self.value_model.parameters(),lr=self.lr)
 
     def generate_experience(self):
+        """
+        重要性采样
+        """
+        self.eval()
         pbar = tqdm(
             self.train_dataloader,
             desc=f"Experience",
@@ -222,7 +227,13 @@ class PPOTrainer():
             }
             experiences.append(experience)
         return experiences
-
+    
+    def eval(self):
+        self.policy_model.eval()
+        self.value_model.eval()
+        if self.reward_mode=="model":
+            self.reward_model.eval()
+        self.ref_model.eval()
 
 
     def learn(self):
@@ -234,6 +245,8 @@ class PPOTrainer():
         self.value_model.train()
         for i in range(self.epoch):
             # TODO 也不用整个train loader的experience一次性传入，可以一部分一部分的传入
+            # 重要性采样是off-policy采样，需要乘以重要性权重个重要性权重p(x)/q(x)
+            # 如果要on-policy则每次更新model后都重新采样
             experiences=self.generate_experience()
             pbar = tqdm(
                 experiences,
@@ -343,10 +356,13 @@ class PPOTrainer():
         batch = {'input_ids': seq, "attention_mask": attention_mask}
         policy_prob = self.policy_model(**batch).logits
         policy_log_prob = gather_log_probs(policy_prob[:, :-1, :], seq[:, 1:])
+
+
+        print("policy_log_prob.requires_grad:", policy_log_prob.requires_grad)
         policy_loss = self.policy_loss_fn(policy_log_prob[:, start:],
                                         log_probs[:, start:], advantages,
                                         action_mask[:, start:])
-        
+        exit(0)
         print(policy_loss)
         policy_loss.backward()
         # # self.policy_model.backward(policy_loss)
@@ -588,6 +604,9 @@ class CustomDataset(Dataset):
     def __len__(self):
         return len(self.sample['input_ids'])
     
+
+
+
 def data_prepare(tokenizer,data_lst,device):
     question_lst=[data['prompt'][0]['content']for data in data_lst]
 
@@ -596,14 +615,10 @@ def data_prepare(tokenizer,data_lst,device):
     train_data = tokenizer.batch_encode_plus(question_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt').to(device) 
     label_data = tokenizer.batch_encode_plus(gt_lst, max_length=512, padding="longest", truncation=True, return_tensors='pt').to(device) 
 
-    # train_data = tokenizer.batch_encode_plus(question_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt')
-    # label_data = tokenizer.batch_encode_plus(gt_lst, max_length=512, padding="longest", truncation=True, return_tensors='pt') 
-    # train_data["labels"] = label_data["input_ids"]
-
-    # train_data={key: value.tolist() for key, value in train_data.items()}
-    # train_data = Dataset.from_dict(train_data)
+    train_data["labels"] = label_data["input_ids"]
 
     return train_data
+
 
 def gather_log_probs(logits, labels):
     """
@@ -701,6 +716,7 @@ def train(args):
 
 
 if __name__=="__main__":
+    os.environ["WANDB_MODE"] = "offline"
     parser = argparse.ArgumentParser()
 
     
@@ -711,11 +727,12 @@ if __name__=="__main__":
     parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/datatset/spider/train.parquet')
     parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/datatset/spider/test.parquet')
     #wandb
-    parser.add_argument("--use_wandb", default='/home/wsy/NLP/RL/RLHF/datatset/spider/test.parquet')
+    parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/outputs')
+    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/spider/outputs')
 
 
     args=parser.parse_args()
+    
 
     train(args)
