@@ -61,24 +61,18 @@ class GRPOTrainer():
 
 
         self.max_answer_seq_len=512
-        self.n_updates_per_iteration = 5
-        self.clip = 0.2 # As recommended by the paper
         self.lr=0.001
         self.save_freq=10
-        self.gamma = 0.95 
         self.epoch=1
-        self.kl_ctl=0.1
-        self.clip_reward_value = 5
         self.batch_size=2
         self.num_generation=2
         self.reward_mode="model" if args.reward_model else "rule"  #{"model","rule"}
-        self.lam = 0.9
         self.cliprange = 0.05
-        self.cliprange_value = 0.05
         self.best_reward = float('-inf')
         self.warmup_ratio=0.0
         self.epsilon = 0.00001
         self.beta=0.01
+        self.grpo_iteration=args.grpo_iteration if args.grpo_iteration else 1
         
 
         self.output_dir = Path(args.output_dir)
@@ -149,19 +143,14 @@ class GRPOTrainer():
                 "policy_model": self.policy_model,
                 "reward": self.reward,
                 "max_answer_seq_len": self.max_answer_seq_len,
-                "n_updates_per_iteration": self.n_updates_per_iteration,
-                "clip": self.clip,
                 "lr": self.lr,
                 "save_freq": self.save_freq,
-                "gamma": self.gamma,
                 "epoch": self.epoch,
-                "kl_ctl": self.kl_ctl,
-                "clip_reward_value": self.clip_reward_value,
                 "batch_size": self.batch_size,
                 "reward_mode": self.reward_mode,
-                "lam": self.lam,
                 "cliprange": self.cliprange,
-                "cliprange_value": self.cliprange_value
+                "num_generation":self.num_generation,
+                "grpo_iteration":self.grpo_iteration,
             }
         )
 
@@ -209,7 +198,7 @@ class GRPOTrainer():
                 desc=f"Train epoch [{i + 1}/{self.epoch}]",
             )
 
-            
+
             policy_loss_sum, reward_sum = 0, 0
             batch_count = 0
             self.policy_optimizer.zero_grad()
@@ -221,39 +210,39 @@ class GRPOTrainer():
                 """
                 prepared_inputs=self.prepare_inputs(batch)
                 rwd_score=torch.tensor(prepared_inputs["rewards"])
-                policy_loss=self.step(prepared_inputs)
-                self.policy_optimizer.step()
-                self.policy_lr_scheduler.step()
-                self.policy_optimizer.zero_grad()
-                policy_loss_sum += policy_loss.item()
-
                 print(f"rwd_score:{rwd_score}")
-                reward_sum += rwd_score.sum().item()
-                batch_count += 1
-                
-                # 更新进度条信息
-                pbar.set_postfix({
-                    'policy_loss': policy_loss.item(),
-                    'reward': rwd_score.mean().item()
-                })
-                
-                # 记录到wandb
                 wandb.log({
-                    "policy_loss": policy_loss.item(),
                     "reward": rwd_score.mean().item(),
-                    "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
                 })
-            avg_policy_loss = policy_loss_sum / max(1, batch_count)
-            avg_reward = reward_sum / max(1, batch_count)
 
-            print(f"Epoch {i+1}/{self.epoch} - Avg Policy Loss: {avg_policy_loss:.4f}, Avg Reward: {avg_reward:.4f}")
+                for i in range(self.grpo_iteration):
+                    policy_loss=self.step(prepared_inputs)
+                    policy_loss_sum += policy_loss.item()
+
+                    batch_count += 1
+                    
+                    # 更新进度条信息
+                    pbar.set_postfix({
+                        'policy_loss': policy_loss.item(),
+                    })
+                    
+                    # 记录到wandb
+                    wandb.log({
+                        "policy_loss": policy_loss.item(),
+                        "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
+                    })
+
+
+
+            avg_policy_loss = policy_loss_sum / max(1, batch_count)
+
+            print(f"Epoch {i+1}/{self.epoch} - Avg Policy Loss: {avg_policy_loss:.4f}")
             
             # 记录到wandb
             if self.use_wandb:
                 wandb.log({
                     "epoch": i+1,
                     "avg_policy_loss": avg_policy_loss,
-                    "avg_reward": avg_reward,
                 })
 
             # 在测试集上评估
@@ -285,28 +274,44 @@ class GRPOTrainer():
         input_ids=batch["input_ids"]
         prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
 
-        with torch.no_grad():
             
-            # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
+        # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
+        if self.grpo_iteration>1:
+            with torch.no_grad():
+                
+                # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
 
+                seq = self.policy_model.model.generate(
+                    batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    max_length=self.max_answer_seq_len,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    )
+
+                seq_mask = seq.not_equal(pad_token_id).long()
+                outputs=self.policy_model(seq, attention_mask=seq_mask)
+                outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
+
+            
+        else:
             seq = self.policy_model.model.generate(
-                batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                max_length=self.max_answer_seq_len,
-                pad_token_id=self.tokenizer.pad_token_id,
-                )
+                    batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    max_length=self.max_answer_seq_len,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    )
 
             seq_mask = seq.not_equal(pad_token_id).long()
-            completions =self.get_completion(seq, input_ids, self.tokenizer)
-            
-        
             outputs=self.policy_model(seq, attention_mask=seq_mask)
             outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
-            rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,completions=completions,labels=batch["labels"])
-            print(f"rwd_score:{rwd_score}")
-            adv=self.compute_adv(rwd_score)
-            print(f"adv:{adv}")
-            
+
+        completions =self.get_completion(seq, input_ids, self.tokenizer)
+        rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,completions=completions,labels=batch["labels"])
+
+        print(f"rwd_score:{rwd_score}")
+        adv=self.compute_adv(rwd_score)
+        print(f"adv:{adv}")
+        
 
         logits = outputs.logits
         logits_ref = outputs_ref.logits
@@ -362,8 +367,7 @@ class GRPOTrainer():
         """
         单步更新
         """
-        # train the rlhf mode here
-        ### process the old outputs
+        
         prompts = prepared_inputs['prompts']
         log_probs = prepared_inputs['logprobs']
         ref_log_probs = prepared_inputs['ref_logprobs']
@@ -375,22 +379,24 @@ class GRPOTrainer():
         start = prompts.size()[-1] - 1
         # #因为第一个token是输入
         action_mask = attention_mask[:, 1:]
-        # 确保只有生成部分的有效 token 参与训练，忽略 padding 部分。
-        ends = start +attention_mask[:, start+1:].sum(1)-1
+        if self.grpo_iteration>1:
+            #需要再次采样，等于是off policy
+            # # 确保只有生成部分的有效 token 参与训练，忽略 padding 部分。
+            # ends = start +attention_mask[:, start+1:].sum(1)-1
+            batch = {'input_ids': seq, "attention_mask": attention_mask}
 
-
-        batch = {'input_ids': seq, "attention_mask": attention_mask}
-
-        policy_prob = self.policy_model(**batch).logits
-        
-            
-            
-
-        policy_log_prob = gather_log_probs(policy_prob[:, :-1, :], seq[:, 1:])
-        print("policy_log_prob.requires_grad:", policy_log_prob.requires_grad)
-        policy_loss = self.compute_loss(policy_log_prob[:, start:],
-                                        log_probs[:, start:], ref_log_probs[:, start:],
-                                        action_mask[:, start:],adv)
+            policy_prob = self.policy_model(**batch).logits
+            policy_log_prob = gather_log_probs(policy_prob[:, :-1, :], seq[:, 1:])
+            print("policy_log_prob.requires_grad:", policy_log_prob.requires_grad)
+            policy_loss = self.compute_loss(policy_log_prob[:, start:],
+                                            log_probs[:, start:], ref_log_probs[:, start:],
+                                            action_mask[:, start:],adv)
+        else:
+            # 如果grpo_iteration=1,则不需要有ratio=1，且不需要再次采样，等于是on policy
+            print("log_probs.requires_grad:", log_probs.requires_grad)
+            policy_loss = self.compute_loss(log_probs[:, start:],
+                                            log_probs[:, start:].detach(), ref_log_probs[:, start:],
+                                            action_mask[:, start:],adv)
         policy_loss.backward()
         # # self.policy_model.backward(policy_loss)
         self.policy_optimizer.step()
@@ -409,8 +415,8 @@ class GRPOTrainer():
         print(self.reward_mode)
         size=seq.shape[0]
         if self.reward=="model":
-
-            total_rewards=self.reward(seq,attention_mask=attention_mask)
+            with torch.no_grad():
+                total_rewards=self.reward(seq,attention_mask=attention_mask)
                             
         elif self.reward_mode=="rule":
             total_rewards=[0 for i in range(size)]
@@ -444,21 +450,24 @@ class GRPOTrainer():
         GRPO KL是token-level的
         GRPO并没有在奖励中添加KL惩罚，而是通过直接将训练策略和参考策略之间的KL散度添加到损失函数中来进行正则化,从而避免了使得𝐴^𝑖,𝑡的计算变得复杂
         当前策略如果和ref策略接近，则kl接近0，loss可能是负数
+
+
+        if self.grpo_iteration=1，则ratio=1，可以简化下面的部分计算为：
+        loss=torch.exp(old_log_probs - old_log_probs.detach()) * adv
+        
         """
         print(f"===========compute loss=========")
-        len_oi=mask[:, ].sum(1)
         
         # kl
         kl=ref_log_probs.exp() / log_probs.exp()- (ref_log_probs - log_probs) - 1
-        ratio=torch.exp(ref_log_probs - old_log_probs)
+        ratio=torch.exp(log_probs - old_log_probs)
+        print(ratio)
         adv=adv.unsqueeze(dim = 1)  # [a, b ,c] -> [[a], [b], [c]]
         loss1=ratio*adv
         loss2=reward_clip = torch.clamp(ratio, 1.0 - self.cliprange,
                                   1.0 + self.cliprange)*adv
-        loss=(torch.minimum(loss1,loss2)-self.beta*kl)*mask
-        loss=-(1/self.num_generation)*(1/len_oi.unsqueeze(dim = 1))*loss
-        loss = loss.sum()
-
+        loss= -(torch.minimum(loss1,loss2)-self.beta*kl)
+        loss = (loss * mask).sum() / mask.sum()
         return loss
 
 
@@ -550,7 +559,8 @@ class GRPOTrainer():
         
         # 保存训练配置
         with open(checkpoint_dir / "training_args.json", 'w') as f:
-            json.dump(vars(self.args), f, indent=2)
+            json.dump(self.__dict__, f, ensure_ascii=False, indent=4, default=str)
+
         
         print(f"Model checkpoint saved to {checkpoint_dir}")
 
@@ -632,6 +642,7 @@ if __name__=="__main__":
     #outputs
     parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/outputs/gsm8k/')
     parser.add_argument("--reward_model", default=None)
+    parser.add_argument("--grpo_iteration", default=1)
 
 
     args=parser.parse_args()
@@ -641,6 +652,11 @@ if __name__=="__main__":
     print(f"device:{device}")
 
     args.device=device
+
+    
+    args.grpo_iteration=1
+
+
     args.reward_fn=[format_reward,correctness_reward]
 
     grpoTrainer=GRPOTrainer(args)

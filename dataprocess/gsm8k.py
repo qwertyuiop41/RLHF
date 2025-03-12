@@ -17,7 +17,7 @@ def make_prefix(dp, template_type):
         prefix=f"""
         <|im_start|>system
         You are a helpful assistant. The assistant first thinks about the mathematical problem step-by-step in the mind and then provides the final answer. The reasoning process and the final answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> step-by-step reasoning process here </think><answer> final numerical answer here </answer>. Now the user asks you to solve a mathematical problem. After thinking through each step carefully, when you finally reach a conclusion, clearly state the final answer within <answer> </answer> tags.\n
-        <|im_end|>\n<|im_start|>user\n{question}\n<|im_end|>\n<|im_start|><think>
+        <|im_end|>\n<|im_start|>user\n{question}\n<|im_end|>\n<|im_start|>assistant<think>
         """
 
     return prefix

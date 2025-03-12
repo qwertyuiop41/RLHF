@@ -71,8 +71,6 @@ class PPOTrainer():
             self.tokenizer.unk_token = self.tokenizer.pad_token
         
         self.max_answer_seq_len=512
-        self.n_updates_per_iteration = 5
-        self.clip = 0.2 # As recommended by the paper
         self.lr=0.001
         self.save_freq=10
         self.gamma = 0.95 
@@ -101,8 +99,6 @@ class PPOTrainer():
                 "value_model": self.value_model,
                 "reward_model": self.reward_model,
                 "max_answer_seq_len": self.max_answer_seq_len,
-                "n_updates_per_iteration": self.n_updates_per_iteration,
-                "clip": self.clip,
                 "lr": self.lr,
                 "save_freq": self.save_freq,
                 "gamma": self.gamma,
@@ -362,7 +358,6 @@ class PPOTrainer():
         policy_loss = self.policy_loss_fn(policy_log_prob[:, start:],
                                         log_probs[:, start:], advantages,
                                         action_mask[:, start:])
-        exit(0)
         print(policy_loss)
         policy_loss.backward()
         # # self.policy_model.backward(policy_loss)
