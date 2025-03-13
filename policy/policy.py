@@ -10,7 +10,6 @@ class PolicyModel(Qwen2PreTrainedModel):
         config=AutoConfig.from_pretrained(pretrain_path)
         super(PolicyModel, self).__init__(config)
         self.config = config
-        self.loss_fn = nn.MSELoss()
         if bnb_config:
             self.model = AutoModelForCausalLM.from_pretrained(pretrain_path,quantization_config=bnb_config)
         else:

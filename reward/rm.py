@@ -50,10 +50,10 @@ class RewardModel(Qwen2PreTrainedModel):
 
 
 
-class RankRewardModel(Qwen2PreTrainedModel):
+class RewardModel(Qwen2PreTrainedModel):
     def __init__(self, pretrain_path,lora_config=None,bnb_config=None):
         config=AutoConfig.from_pretrained(pretrain_path)
-        super(RankRewardModel, self).__init__(config)
+        super(RewardModel, self).__init__(config)
         self.config = config
         # self.model = Qwen2Model(config)
         if bnb_config:
@@ -65,9 +65,7 @@ class RankRewardModel(Qwen2PreTrainedModel):
         self.linear = nn.Linear(config.hidden_size, 1)
 
     def forward(self, input_ids, attention_mask, labels=None):
-        outputs = self.model(input_ids=input_ids,
-                             attention_mask=attention_mask,
-                             output_hidden_states=True).hidden_states[-1]
+        outputs = self.model(input_ids=input_ids,attention_mask=attention_mask,output_hidden_states=True).hidden_states[-1]
         # TODO reward应该取最后一位token对应的分数
         # reward = self.linear(outputs).mean(dim=1) 
         reward=self.linear(outputs)[0][-1]

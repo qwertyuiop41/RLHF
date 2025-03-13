@@ -433,11 +433,13 @@ class GRPOTrainer():
         """
         根据reward score计算advantage
         包含过程监督强化学习+GRPO 和 结果监督强化学习+GRPO 两种方式
-        Ai,t=(ri-mean(r))/std(r), t对应token-level优势，即一个句子中，每个token对应的优势是一样的。这种方式的好处在于，估计都是从真实的环境reward计算得来，而不是通过价值估计计算而得。
+        Ai,t=(ri-mean(r))/std(r), t对应token-level优势，即一个句子中，每个token对应的优势是一样的。
+        这种方式的好处在于，估计都是从真实的环境reward计算得来，而不是通过价值估计计算而得。
         """
-        
+        print(rewards)
         rewards = torch.tensor(rewards, dtype = torch.float).to(self.device)
         A = (rewards - rewards.mean()) / (rewards.std() + self.epsilon)
+        print(A.shape)
         return A
 
 
@@ -635,8 +637,9 @@ if __name__=="__main__":
     # Models
     parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/datatset/gsm8k/train.parquet')
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/datatset/gsm8k/test.parquet')
+    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/gsm8k/train.parquet')
+    
+    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/gsm8k/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs

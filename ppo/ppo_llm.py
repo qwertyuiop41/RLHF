@@ -37,8 +37,8 @@ class PPO():
         self.lr=0.005
         self.save_freq=10
         self.gamma = 0.95 
-        self.train_dataset_path='/home/wsy/NLP/RL/RLHF/datatset/spider/train.parquet'
-        self.test_dataset_path='/home/wsy/NLP/RL/RLHF/datatset/spider/test.parquet'
+        self.train_dataset_path='/home/wsy/NLP/RL/RLHF/dataset/spider/train.parquet'
+        self.test_dataset_path='/home/wsy/NLP/RL/RLHF/dataset/spider/test.parquet'
         self.batch_size=4
 
         self.train_dataset=load_dataset("parquet", data_files=self.train_dataset_path,split='train')

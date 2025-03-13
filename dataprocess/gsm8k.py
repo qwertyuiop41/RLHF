@@ -30,7 +30,7 @@ def extract_gt(text):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--local_dir', default='/home/wsy/NLP/RL/RLHF/datatset')
+    parser.add_argument('--local_dir', default='/home/wsy/NLP/RL/RLHF/dataset')
     parser.add_argument('--dataset_name', default='openai/gsm8k')
     parser.add_argument('--train_size', type=int, default=None)
     parser.add_argument('--test_size', type=int, default=None)

@@ -247,17 +247,12 @@ class DPOTrainer():
         rejected_attention_mask=batch["rejected_attention_mask"]
         prompt_ids=batch["input_ids"]
 
-
-
-
-
         policy_chosen_logits=self.policy_model(chosen_input_ids,chosen_attention_mask).logits
         ref_chosen_logits=self.ref_model(chosen_input_ids,chosen_attention_mask).logits
         policy_rejected_logits=self.policy_model(rejected_input_ids,rejected_attention_mask).logits
         ref_rejected_logits=self.ref_model(rejected_input_ids,rejected_attention_mask).logits
 
         
-
         policy_chosen_logps=gather_log_probs(policy_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
         ref_chosen_logps=gather_log_probs(ref_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
         policy_rejected_logps=gather_log_probs(policy_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])
@@ -460,8 +455,8 @@ if __name__=="__main__":
     # Models
     parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/datatset/hh_rlhf_cn/train.parquet')
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/datatset/hh_rlhf_cn/test.parquet')
+    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/hh_rlhf_cn/train.parquet')
+    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/hh_rlhf_cn/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs

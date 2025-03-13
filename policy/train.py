@@ -506,12 +506,6 @@ class PPOTrainer():
         reward_clip = torch.clamp(reward_score, -self.clip_reward_value,
                                   self.clip_reward_value)
         batch_size = log_probs.shape[0]
-        print(start)
-        print(action_mask)
-        print(rewards.shape)
-        print(ends)
-        # print(rewards)
-        print(reward_clip)
          # 在L维度上，答案部分每个位置都有KL散度，但是只在最后一个位置加上奖励值
         for j in range(batch_size):
             print(rewards[j, ends[j]])
@@ -526,9 +520,7 @@ class PPOTrainer():
         print("================compute adavantage================")
         # https://huggingface.co/blog/deep-rl-a2c
         # values（B，L） critic_model 输出，包含每个 token 上的评分
-        print(values.shape)
         # rewards（B，L）reward_model 输出包含了kl散度以及最后一个有效答案 token 的奖励值
-        print(rewards.shape)
         # start 是 answer 开始的位置
         lastgaelam = 0
         advantages_reversed = []
@@ -554,7 +546,7 @@ class PPOTrainer():
 
 
     def policy_loss_fn(self, logprobs, old_logprobs, advantages, mask):
-        ## policy gradient loss
+        # 重要性采样权重计算 ratio = exp(log(new)-log(old)) 因为ppo是off policy的，所以需要加上ratio
         log_ratio = (logprobs - old_logprobs) * mask
         ratio = torch.exp(log_ratio)
         pg_loss1 = -advantages * ratio
@@ -566,16 +558,13 @@ class PPOTrainer():
 
 
     def value_loss_fn(self, values, old_values, returns, mask):
-        print("=========value loss=========")
-        ## value loss
-        ## value loss 需要注意的是这里使用裁剪的“老critic_model”的输出约束“新critic_model”不要步子太大。
-        print(values.shape)
-        print(old_values.shape)
-        values_clipped = torch.clamp(
-            values,
-            old_values - self.cliprange_value,
-            old_values + self.cliprange_value,
-        )
+        # value loss 需要注意的是这里使用裁剪的“老critic_model”的输出约束“新critic_model”不要步子太大。
+        """
+        values: 实时critic跑出来的预估预期收益（是变动的，随着ppo epoch迭代而改变）
+        old_values：老critic跑出来的预估预期收益（是固定值）
+        returns：实际预期收益(认为是实际value=Adv+r)
+        """
+        values_clipped = torch.clamp(values,old_values - self.cliprange_value,old_values + self.cliprange_value)
         values = values.float()
         values_clipped = values_clipped.float()
         vf_loss1 = (values - returns)**2
@@ -719,8 +708,8 @@ if __name__=="__main__":
     # Models
     parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/datatset/spider/train.parquet')
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/datatset/spider/test.parquet')
+    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/spider/train.parquet')
+    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/spider/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
