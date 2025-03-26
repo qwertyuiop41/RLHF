@@ -86,6 +86,11 @@ class DPOTrainer():
 
 
         self.train_dataset=data_prepare(self.tokenizer,train_data,self.device)
+
+        print(self.train_dataset)
+        exit()
+
+
         self.test_dataset=data_prepare(self.tokenizer,test_data,self.device)
 
         self.train_dataloader=DataLoader(dataset=CustomDataset(self.train_dataset),shuffle=True,batch_size=self.batch_size)
@@ -165,7 +170,7 @@ class DPOTrainer():
             num_training_steps=max_train_steps,
         )
 
-        self.policy_optimizer=torch.optim.Adam(self.policy_model.parameters(),lr=self.lr)
+
 
 
 

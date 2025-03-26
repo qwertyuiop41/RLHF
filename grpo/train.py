@@ -49,6 +49,7 @@ from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
 from RLHF.reward.rm import RewardModel
 from RLHF.grpo.gms8k_reward import format_reward,correctness_reward
+from RLHF.grpo.kk import compute_score
 
 
 class GRPOTrainer():
@@ -67,6 +68,7 @@ class GRPOTrainer():
         self.batch_size=2
         self.num_generation=2
         self.reward_mode="model" if args.reward_model else "rule"  #{"model","rule"}
+        self.reward_fn="kk" #{"kk","gms8k"}
         self.cliprange = 0.05
         self.best_reward = float('-inf')
         self.warmup_ratio=0.0
@@ -212,7 +214,7 @@ class GRPOTrainer():
                 rwd_score=torch.tensor(prepared_inputs["rewards"])
                 print(f"rwd_score:{rwd_score}")
                 wandb.log({
-                    "reward": rwd_score.mean().item(),
+                    "reward": rwd_score.float.mean().item(),
                 })
 
                 for i in range(self.grpo_iteration):
@@ -224,11 +226,13 @@ class GRPOTrainer():
                     # 更新进度条信息
                     pbar.set_postfix({
                         'policy_loss': policy_loss.item(),
+                        'reward': rwd_score.float().mean().item
                     })
                     
                     # 记录到wandb
                     wandb.log({
                         "policy_loss": policy_loss.item(),
+                        "reward": rwd_score.float().mean().item(),
                         "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
                     })
 
@@ -416,16 +420,46 @@ class GRPOTrainer():
         size=seq.shape[0]
         if self.reward=="model":
             with torch.no_grad():
-                total_rewards=self.reward(seq,attention_mask=attention_mask)
-                            
+                rwd_score=self.reward(seq,attention_mask=attention_mask)
+            return rwd_score                
         elif self.reward_mode=="rule":
-            total_rewards=[0 for i in range(size)]
-            for rwd_fn in self.reward:
-                rewards=rwd_fn(completions,labels) 
-                total_rewards = [r1 + r2 for r1, r2 in zip(total_rewards, rewards)]
+            if self.reward_fn=="gsm8k":
+                rwd_score=[0 for i in range(size)]
+                for rwd_fn in self.reward:
+                    rewards=rwd_fn(completions,labels) 
+                    rwd_score = [r1 + r2 for r1, r2 in zip(rwd_score, rewards)]
+            elif self.reward_fn=="kk":
+                print(seq.shape)
+                print(labels.shape)
+                rwd_score=[]
 
-        print(total_rewards)
-        return total_rewards
+                
+                for s, g in zip(seq,labels):
+                    # print(s)
+                    seq_text = self.tokenizer.decode(s, skip_special_tokens=True)
+
+                    target = "assistant\nLet me solve this step by step"
+
+                    # 分割字符串
+                    parts = seq_text.split(target, 1)  
+
+                    # 获取目标短语后面的内容
+                    if len(parts) > 1:
+                        solution_str = parts[1].strip()  # 去除前后空格
+                        print(solution_str)
+                        gt_text=self.tokenizer.decode(g, skip_special_tokens=True)
+                        ground_truth=json.loads(gt_text)
+
+                        score=compute_score(solution_str,ground_truth)
+                        rwd_score.append([score])
+
+                    else:
+                        print("没找到answer")
+                        rwd_score.append([0])
+            rwd_score=torch.tensor(rwd_score).to(device=self.device)
+            print(rwd_score)
+            return rwd_score
+
     
         
 
@@ -585,16 +619,14 @@ class GRPOTrainer():
 
 
 def data_prepare(tokenizer,data_lst,device):
-    
     question_lst=[data['prompt'][0]['content']for data in data_lst]
 
-
-    gt_lst=[data["reward_model"]["ground_truth"]for data in data_lst]
+    gt_lst=[json.dumps(data["reward_model"]["ground_truth"])for data in data_lst]
 
     train_data = tokenizer.batch_encode_plus(question_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt').to(device) 
-    label_data = torch.tensor(gt_lst).to(device) 
+    label_data = tokenizer.batch_encode_plus(gt_lst, max_length=512, padding="longest", truncation=True, return_tensors='pt').to(device) 
 
-    train_data["labels"] = label_data
+    train_data["labels"] = label_data["input_ids"]
 
     return train_data
 
@@ -637,13 +669,13 @@ if __name__=="__main__":
     # Models
     parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/gsm8k/train.parquet')
+    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/Logic-RL/data/kk/instruct/3ppl/train.parquet')
     
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/gsm8k/test.parquet')
+    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/Logic-RL/data/kk/instruct/3ppl/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/outputs/gsm8k/')
+    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/outputs/kk/')
     parser.add_argument("--reward_model", default=None)
     parser.add_argument("--grpo_iteration", default=1)
 

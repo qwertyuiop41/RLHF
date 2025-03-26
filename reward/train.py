@@ -294,8 +294,17 @@ def rank_train(pretrain_path, save_path, num_epochs=10, eval_steps=50, save_step
         },
     ]
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=2e-5)
+    
+    
     train_data, tokenizer = rank_data_prepare(pretrain_path)
+    print(dataloader)
+    exit()
+
+
     dataloader = DataLoader(dataset=CustomDataset(train_data), shuffle=True, batch_size=batch_size)
+
+
+    
 
     max_train_steps = num_epochs * len(dataloader)
     warm_steps = int(0.1 * max_train_steps)
@@ -421,9 +430,10 @@ def predict(model_path):
 if __name__=="__main__":
     # 配置 wandb (在运行前需要登录 wandb)
     # wandb.login()
-    
+    os.environ["WANDB_MODE"] = "offline"
+    os.environ["WANDB_API_KEY"]="a03c41d31f8b3661b148b577f6f06348387d54fb"
     # 使用更多参数的训练函数
-    train(
+    rank_train(
         pretrain_path='/home/wsy/NLP/RL/Qwen2.5-0.5B-Instruct',
         save_path='/home/wsy/NLP/RL/RLHF/reward/ckpt',
         num_epochs=2,

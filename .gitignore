@@ -4,3 +4,7 @@ policy/test.py
 outputs
 wandb
 dataset
+reward/wandb2
+*.tar
+*.log
+train

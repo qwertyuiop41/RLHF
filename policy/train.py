@@ -48,7 +48,7 @@ sys.path.append("/home/wsy/NLP/RL")
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
 from RLHF.reward.rm import RewardModel
-
+from RLHF.policy.countdown import compute_score
 
 
 
@@ -58,7 +58,9 @@ class PPOTrainer():
         self.value_model=value_model.to(device)
         # 不会变的 记住sft之后的内容
         self.ref_model=deepcopy(self.policy_model).to(device)
-        self.reward_model=reward_model.to(device)
+        if reward_model:
+            self.reward_model=reward_model.to(device)
+        self.reward_mode="model" if reward_model else "rule"
         self.train_dataset=train_data
         self.train_dataloader=train_dataloader
         self.test_dataloader=test_dataloader
@@ -77,8 +79,7 @@ class PPOTrainer():
         self.epoch=1
         self.kl_ctl=0.1
         self.clip_reward_value = 5
-        self.batch_size=1
-        self.reward_mode="model"  #{"model","rule"}
+        self.batch_size=2
         self.lam = 0.9
         self.cliprange = 0.05
         self.cliprange_value = 0.05
@@ -97,7 +98,8 @@ class PPOTrainer():
             config={
                 "policy_model": self.policy_model,
                 "value_model": self.value_model,
-                "reward_model": self.reward_model,
+                "reward_mode": self.reward_mode,
+                "reward_model": self.reward_model if self.reward_mode=="model" else "rule",
                 "max_answer_seq_len": self.max_answer_seq_len,
                 "lr": self.lr,
                 "save_freq": self.save_freq,
@@ -183,6 +185,7 @@ class PPOTrainer():
                     
             pad_token_id = self.tokenizer.pad_token_id
             input_ids=batch["input_ids"]
+            gt=batch["labels"]
             prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
 
             with torch.no_grad():
@@ -201,7 +204,8 @@ class PPOTrainer():
             
                 outputs=self.policy_model(seq, attention_mask=seq_mask)
                 outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
-                rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask)
+
+                rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,gt=gt)
                 # values 估计的是当前 token 未来的累积奖励,所以不需要最后一个
                 # 评论模型 critic_model 返回结果维度是(B,L)，L 维度上第 i 个位置代表从 i 位置到最后的累积奖励，用于辅助评估策略的好坏，舍去最后一个位置的 token
                 # 价值函数  V(t) 是基于当前状态评估未来的期望回报，但最后一个 token 通常没有后续的未来信息，因此它的价值估计没有意义。
@@ -475,23 +479,52 @@ class PPOTrainer():
 
 
 
-    def compute_reward_score(self,seq,attention_mask):
+    def compute_reward_score(self,seq,attention_mask,gt):
         """
         prompt+outputs调用reward model
         """
-        rwd_score=0
+        print("=============compute reward score================")
+
+
         if self.reward_mode=="model":
 
             rwd_score=self.reward_model(seq,attention_mask=attention_mask)
+            return rwd_score
                             
-        elif self.reward_mode=="rule":
-            gt=input["label"]
-            if seq==gt:
-                rwd_score=1.0
-            else:
-                rwd_score=0.0
-            rwd_score=1.0
-        return rwd_score
+        else:
+            print(seq.shape)
+            print(gt.shape)
+            rwd_score=[]
+
+            
+            for s, g in zip(seq,gt):
+                # print(s)
+                seq_text = self.tokenizer.decode(s, skip_special_tokens=True)
+
+                target = "assistant\nLet me solve this step by step"
+
+                # 分割字符串
+                parts = seq_text.split(target, 1)  
+
+                # 获取目标短语后面的内容
+                if len(parts) > 1:
+                    solution_str = parts[1].strip()  # 去除前后空格
+                    print(solution_str)
+                    gt_text=self.tokenizer.decode(g, skip_special_tokens=True)
+                    ground_truth=json.loads(gt_text)
+
+                    score=compute_score(solution_str,ground_truth)
+                    rwd_score.append([score])
+
+                else:
+                    print("没找到answer")
+                    rwd_score.append([0])
+            rwd_score=torch.tensor(rwd_score).to(device=self.device)
+            print(rwd_score)
+
+            return rwd_score
+
+
     
 
 
@@ -505,6 +538,9 @@ class PPOTrainer():
         ends = start +action_mask[:, start+1:].sum(1)-1
         reward_clip = torch.clamp(reward_score, -self.clip_reward_value,
                                   self.clip_reward_value)
+        print(reward_clip.shape)
+        print(reward_clip)
+        print(rewards.shape)
         batch_size = log_probs.shape[0]
          # 在L维度上，答案部分每个位置都有KL散度，但是只在最后一个位置加上奖励值
         for j in range(batch_size):
@@ -512,7 +548,6 @@ class PPOTrainer():
             print(reward_clip[j])
             rewards[j, ends[j]] += reward_clip[j][-1]
             rwd.append(reward_clip[j][-1])
-
         return rewards,torch.tensor(rwd,dtype=torch.float16)
     
 
@@ -592,9 +627,10 @@ class CustomDataset(Dataset):
 
 
 def data_prepare(tokenizer,data_lst,device):
+    
     question_lst=[data['prompt'][0]['content']for data in data_lst]
 
-    gt_lst=[data["reward_model"]["ground_truth"]for data in data_lst]
+    gt_lst=[json.dumps(data["reward_model"]["ground_truth"])for data in data_lst]
 
     train_data = tokenizer.batch_encode_plus(question_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt').to(device) 
     label_data = tokenizer.batch_encode_plus(gt_lst, max_length=512, padding="longest", truncation=True, return_tensors='pt').to(device) 
@@ -612,10 +648,7 @@ def gather_log_probs(logits, labels):
     log_probs = F.log_softmax(logits, dim=-1)
     # print(f"logprob:{log_probs}")
     log_probs_labels = log_probs.gather(dim=-1, index=labels.unsqueeze(-1))
-    # print(f"labels:{labels}")
-    # print(labels.unsqueeze(-1))
-    # print(f"loglabels:{log_probs_labels}")
-    # exit()
+
     return log_probs_labels.squeeze(-1)
 
 
@@ -647,13 +680,13 @@ def train(args):
     tokenizer=AutoTokenizer.from_pretrained(pretrain_path)
     tokenizer.padding_side='left'
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_8bit=False,  # 不使用8bit
-        load_in_4bit=False,  # 不使用4bit
-        load_in_2bit=True,   # 启用 2-bit 量化
-        bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
-        bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
-    )
+    # bnb_config = BitsAndBytesConfig(
+    #     load_in_8bit=False,  # 不使用8bit
+    #     load_in_4bit=False,  # 不使用4bit
+    #     load_in_2bit=True,   # 启用 2-bit 量化
+    #     bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
+    #     bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
+    # )
 
 
     # 设置 LoRA 配置
@@ -667,11 +700,11 @@ def train(args):
     )
 
 
-    policy=PolicyModel(pretrain_path,lora_config,bnb_config=bnb_config)
+    policy=PolicyModel(pretrain_path,lora_config,bnb_config=None)
     # policy = get_peft_model(policy,lora_config)
-    value=ValueModel(pretrain_path,lora_config,bnb_config=bnb_config)
+    value=ValueModel(pretrain_path,lora_config,bnb_config=None)
     # value = get_peft_model(value,lora_config)
-    rm=RewardModel(pretrain_path,lora_config,bnb_config=bnb_config)
+    # rm=RewardModel(pretrain_path,lora_config,bnb_config=None)
     # rm = get_peft_model(rm,lora_config)
 
 
@@ -685,11 +718,11 @@ def train(args):
     train_dataset=data_prepare(tokenizer,train_dataset,device)
     test_dataset=data_prepare(tokenizer,test_dataset,device)
 
-    train_dataloader=DataLoader(dataset=CustomDataset(train_dataset),shuffle=True,batch_size=1)
-    test_dataloader=DataLoader(dataset=CustomDataset(test_dataset),shuffle=False,batch_size=1)
+    train_dataloader=DataLoader(dataset=CustomDataset(train_dataset),shuffle=True,batch_size=2)
+    test_dataloader=DataLoader(dataset=CustomDataset(test_dataset),shuffle=False,batch_size=2)
 
 
-    ppo=PPOTrainer(policy_model=policy,value_model=value,reward_model=rm,
+    ppo=PPOTrainer(policy_model=policy,value_model=value,reward_model=None,
     train_data=train_dataset,test_data=test_dataset,train_dataloader=train_dataloader,test_dataloader=test_dataloader,tokenizer=tokenizer,device=device,args=args)
     ppo.learn()
 
@@ -708,8 +741,8 @@ if __name__=="__main__":
     # Models
     parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/spider/train.parquet')
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/spider/test.parquet')
+    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/TinyZero/data/countdown/train.parquet')
+    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/TinyZero/data/countdown/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
