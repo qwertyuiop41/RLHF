@@ -43,7 +43,7 @@ from transformers import (
 
 
 import sys
-sys.path.append("/home/wsy/NLP/RL")
+sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
 
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
@@ -63,13 +63,15 @@ class DPOTrainer():
 
 
         self.max_answer_seq_len=512
-        self.lr=0.001
-        self.save_freq=10
-        self.epoch=1
-        self.batch_size=2
+        self.lr=1e-5
+        self.save_steps=240
+        self.eval_steps=60
+        self.epoch=3
+        self.batch_size=4
         self.best_reward = float('-inf')
         self.warmup_ratio=0.0
         self.beta=0.1 # 一般在0.1到0.5之间
+        self.accumulation_steps=10
 
         
 
@@ -77,8 +79,8 @@ class DPOTrainer():
         self.output_dir.mkdir(exist_ok=True, parents=True)
 
 
-        train_data=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(8)
-        test_data=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).take(4)
+        train_data=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(300)
+        test_data=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).skip(300).take(30)
 
         
         self.tokenizer=AutoTokenizer.from_pretrained(pretrain_path)
@@ -86,9 +88,6 @@ class DPOTrainer():
 
 
         self.train_dataset=data_prepare(self.tokenizer,train_data,self.device)
-
-        print(self.train_dataset)
-        exit()
 
 
         self.test_dataset=data_prepare(self.tokenizer,test_data,self.device)
@@ -101,20 +100,20 @@ class DPOTrainer():
             self.tokenizer.unk_token = self.tokenizer.pad_token
 
         
-        bnb_config = BitsAndBytesConfig(
-            load_in_8bit=False,  # 不使用8bit
-            load_in_4bit=False,  # 不使用4bit
-            load_in_2bit=True,   # 启用 2-bit 量化
-            bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
-            bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
-        )
+        # bnb_config = BitsAndBytesConfig(
+        #     load_in_8bit=False,  # 不使用8bit
+        #     load_in_4bit=False,  # 不使用4bit
+        #     load_in_2bit=True,   # 启用 2-bit 量化
+        #     bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
+        #     bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
+        # )
         # bnb_config=None
 
 
         # 设置 LoRA 配置
         lora_config = LoraConfig(
-            r=1,  # Rank，越大表示 LoRA 层越大，消耗显存更多
-            lora_alpha=8,  # LoRA scaling factor
+            r=2,  # Rank，越大表示 LoRA 层越大，消耗显存更多
+            lora_alpha=4,  # LoRA scaling factor
             lora_dropout=0.1,  # Dropout 防止过拟合
             target_modules=["q_proj", "v_proj"],  # 只训练注意力层
             bias="none",
@@ -122,24 +121,33 @@ class DPOTrainer():
         )
 
 
-        self.policy_model=PolicyModel(pretrain_path,lora_config,bnb_config=bnb_config).to(self.device)
+        self.policy_model=PolicyModel(pretrain_path,lora_config).to(self.device)
         self.ref_model=deepcopy(self.policy_model).to(self.device)
-        
+
+        # self.policy_model.cuda().half() 
+        # self.ref_model.cuda().half()
+
+
+
         
 
 
         # 初始化wandb
         # if args.use_wandb:
         wandb.init(
-            project='rlhf-grpo',
-            name=f"grpo-{time.strftime('%Y%m%d-%H%M%S')}",
+            project='rlhf-dpo-1.5b-4',
+            name=f"dpo-{time.strftime('%Y%m%d-%H%M%S')}",
+            dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/dpo",
             config={
                 "policy_model": self.policy_model,
+                "lora_config": lora_config,
                 "max_answer_seq_len": self.max_answer_seq_len,
                 "lr": self.lr,
-                "save_freq": self.save_freq,
+                "save_steps": self.save_steps,
+                "eval_steps": self.eval_steps,
                 "epoch": self.epoch,
-                "batch_size": self.batch_size
+                "batch_size": self.batch_size,
+                "accumulation_steps":self.accumulation_steps,
             }
         )
 
@@ -183,7 +191,9 @@ class DPOTrainer():
         epoch轮学习
         """
         print("==============dpo learn==============")
+        global_step=0
         self.policy_model.train()
+        self.ref_model.eval()
         for i in range(self.epoch):
             pbar = tqdm(
                 self.train_dataloader,
@@ -194,11 +204,19 @@ class DPOTrainer():
             self.policy_optimizer.zero_grad()
             for batch in pbar:
                 policy_loss=self.step(batch)
+                
+                # # self.policy_model.backward(policy_loss)
+                # if (global_step + 1) % self.accumulation_steps == 0:
+                #     self.policy_optimizer.step()
+                #     self.policy_lr_scheduler.step()
+
+                #     self.policy_optimizer.zero_grad()
 
                 policy_loss_sum += policy_loss.item()
 
 
                 batch_count += 1
+                global_step+=1
                 
                 # 更新进度条信息
                 pbar.set_postfix({
@@ -210,6 +228,21 @@ class DPOTrainer():
                     "policy_loss": policy_loss.item(),
                     "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
                 })
+                                # 定期保存模型
+                if global_step > 0 and global_step % self.save_steps == 0:
+                    self.save_checkpoint(f"checkpoint-steps-{global_step}")
+
+                
+
+                if global_step > 0 and global_step % self.eval_steps == 0:
+                    # 在测试集上评估
+                    test_reward = self.evaluate()
+                    # 保存最佳模型
+                    if test_reward > self.best_reward:
+                        self.best_reward = test_reward
+                        self.save_checkpoint("best_model")
+                        print(f"New best model with reward: {test_reward:.4f}")
+
             avg_policy_loss = policy_loss_sum / max(1, batch_count)
 
             print(f"Epoch {i+1}/{self.epoch} - Avg Policy Loss: {avg_policy_loss:.4f}")
@@ -221,18 +254,18 @@ class DPOTrainer():
                     "avg_policy_loss": avg_policy_loss,
                 })
 
-            # # 在测试集上评估
-            # test_reward = self.evaluate()
+            # 在测试集上评估
+            test_reward = self.evaluate()
             
             # 保存模型
-            if (i+1) % self.save_freq == 0 or i == self.epoch - 1:
+            if (i+1) % self.save_steps == 0 or i == self.epoch - 1:
                 self.save_checkpoint(f"checkpoint-epoch-{i+1}")
             
-            # # 保存最佳模型
-            # if test_reward > self.best_reward:
-            #     self.best_reward = test_reward
-            #     self.save_checkpoint("best_model")
-            #     print(f"New best model with reward: {test_reward:.4f}")
+            # 保存最佳模型
+            if test_reward > self.best_reward:
+                self.best_reward = test_reward
+                self.save_checkpoint("best_model")
+                print(f"New best model with reward: {test_reward:.4f}")
 
             
         wandb.finish()
@@ -253,27 +286,36 @@ class DPOTrainer():
         prompt_ids=batch["input_ids"]
 
         policy_chosen_logits=self.policy_model(chosen_input_ids,chosen_attention_mask).logits
-        ref_chosen_logits=self.ref_model(chosen_input_ids,chosen_attention_mask).logits
         policy_rejected_logits=self.policy_model(rejected_input_ids,rejected_attention_mask).logits
-        ref_rejected_logits=self.ref_model(rejected_input_ids,rejected_attention_mask).logits
+
+        with torch.no_grad():
+            ref_chosen_logits=self.ref_model(chosen_input_ids,chosen_attention_mask).logits
+            ref_rejected_logits=self.ref_model(rejected_input_ids,rejected_attention_mask).logits
+            
 
         
-        policy_chosen_logps=gather_log_probs(policy_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
-        ref_chosen_logps=gather_log_probs(ref_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
-        policy_rejected_logps=gather_log_probs(policy_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])
-        ref_rejected_logps=gather_log_probs(ref_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])
+        # policy_chosen_logps=gather_log_probs(policy_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
+        # ref_chosen_logps=gather_log_probs(ref_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
+        # policy_rejected_logps=gather_log_probs(policy_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])
+        # ref_rejected_logps=gather_log_probs(ref_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])
+
+        # start = prompt_ids.size()[-1] - 1
+
+        # loss = self.compute_loss(policy_chosen_logps[:, start:],policy_rejected_logps[:, start:],ref_chosen_logps[:, start:],ref_rejected_logps[:, start:])
 
         start = prompt_ids.size()[-1] - 1
 
-        loss = self.compute_loss(policy_chosen_logps[:, start:],policy_rejected_logps[:, start:],ref_chosen_logps[:, start:],ref_rejected_logps[:, start:])
-
+        loss = self.compute_loss(gather_log_probs(policy_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])[:, start:],
+                                    gather_log_probs(policy_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])[:, start:],
+                                    gather_log_probs(ref_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])[:, start:],
+                                    gather_log_probs(ref_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])[:, start:])
         print(loss)
         loss.backward()
-        # # self.policy_model.backward(policy_loss)
         self.policy_optimizer.step()
         self.policy_lr_scheduler.step()
 
         self.policy_optimizer.zero_grad()
+
 
 
         return loss
@@ -306,76 +348,61 @@ class DPOTrainer():
     
 
 
-    # def evaluate(self):
-    #     """
-    #     在测试集上进行评估
-    #     """
-    #     print("==============Evaluating on test set==============")
-    #     self.policy_model.eval()
-    #     self.value_model.eval()
+    def evaluate(self):
+        """
+        在测试集上进行评估
+        chosen比rejected分高，则算是正确（不要求直接分数）
+        """
+        print("==============Evaluating on test set==============")
+        self.policy_model.eval()
         
-    #     total_reward = 0
-    #     generated_examples = []
-    #     num_samples = min(5, len(self.test_dataloader))  # 仅记录少量样本用于展示
+        total_loss = 0
         
-    #     with torch.no_grad():
-    #         for idx, batch in enumerate(tqdm(self.test_dataloader, desc="Evaluating")):
-    #             # 将数据移到相应设备
-    #             for k, v in batch.items():
-    #                 if isinstance(v, torch.Tensor):
-    #                     batch[k] = v.to(self.device)
+        with torch.no_grad():
+            for idx, batch in enumerate(tqdm(self.test_dataloader, desc="Evaluating")):
+            #     # 将数据移到相应设备
+            #     for k, v in batch.items():
+            #         if isinstance(v, torch.Tensor):
+            #             batch[k] = v.to(self.device).half()
                 
-    #             input_ids = batch["input_ids"]
-    #             prompts = self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
-                
-    #             try:
+                chosen_input_ids=batch["chosen_input_ids"]
+                chosen_attention_mask=batch["chosen_attention_mask"]
+                rejected_input_ids=batch["rejected_input_ids"]
+                rejected_attention_mask=batch["rejected_attention_mask"]
+                prompt_ids=batch["input_ids"]
 
-                    
-    #                 seq = self.policy_model.model.generate(
-    #                     batch["input_ids"],
-    #                     attention_mask=batch["attention_mask"],
-    #                     max_length=self.max_answer_seq_len,
-    #                     pad_token_id=self.tokenizer.pad_token_id,
-    #                 )
-                    
-    #                 seq_mask = seq.not_equal(self.tokenizer.pad_token_id).long()
-                    
-    #                 # 计算奖励分数
-    #                 reward = self.compute_reward_score(seq, attention_mask=seq_mask)
-    #                 total_reward += reward.mean().item()
-                    
-    #                 # 解码生成的回答
-    #                 generations = self.tokenizer.batch_decode(seq, skip_special_tokens=True)
-                    
-    #                 # 保存一些样本用于展示
-    #                 if idx < num_samples:
-    #                     for p, g, r in zip(prompts, generations, reward):
-    #                         generated_examples.append({
-    #                             "prompt": p,
-    #                             "generation": g,
-    #                             "reward": r.item()
-    #                         })
+                policy_chosen_logits=self.policy_model(chosen_input_ids,chosen_attention_mask).logits
+                ref_chosen_logits=self.ref_model(chosen_input_ids,chosen_attention_mask).logits
+                policy_rejected_logits=self.policy_model(rejected_input_ids,rejected_attention_mask).logits
+                ref_rejected_logits=self.ref_model(rejected_input_ids,rejected_attention_mask).logits
+
                 
-    #             except Exception as e:
-    #                 print(f"Error during evaluation: {e}")
-    #                 continue
+                # policy_chosen_logps=gather_log_probs(policy_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
+                # ref_chosen_logps=gather_log_probs(ref_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])
+                # policy_rejected_logps=gather_log_probs(policy_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])
+                # ref_rejected_logps=gather_log_probs(ref_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])
+
+                start = prompt_ids.size()[-1] - 1
+
+                loss = self.compute_loss(gather_log_probs(policy_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])[:, start:],
+                                         gather_log_probs(policy_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])[:, start:],
+                                         gather_log_probs(ref_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])[:, start:],
+                                         gather_log_probs(ref_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])[:, start:])
+                total_loss += loss.item()
         
-    #     # 计算平均奖励
-    #     avg_reward = total_reward / len(self.test_dataloader)
-    #     print(f"Test set - Average reward: {avg_reward:.4f}")
+        # 计算平均奖励
+        avg_loss = total_loss / len(self.test_dataloader)
+        print(f"Test set - Average loss: {avg_loss:.4f}")
         
 
-    #     wandb.log({"test_reward": avg_reward})
-        
-    #     # 创建一个表格记录生成样本
-    #     if generated_examples:
-    #         table = wandb.Table(columns=["prompt", "generation", "reward"])
-    #         for example in generated_examples:
-    #             table.add_data(example["prompt"], example["generation"], example["reward"])
-    #         wandb.log({"generation_examples": table})
+        wandb.log({"test_loss": avg_loss})
         
         
-    #     return avg_reward
+        
+        return avg_loss
+
+
+    
     def save_checkpoint(self, checkpoint_name):
         """
         保存模型检查点
@@ -458,14 +485,14 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/hh_rlhf_cn/train.parquet')
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/hh_rlhf_cn/test.parquet')
+    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/datatset/hh_rlhf_cn/train.parquet')
+    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/datatset/hh_rlhf_cn/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/outputs/hh_rlhf_cn/')
+    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/outputs/hh_rlhf_cn/')
     parser.add_argument("--reward_model", default=None)
 
 

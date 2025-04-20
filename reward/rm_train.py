@@ -1,6 +1,5 @@
 import argparse
-from rm import RewardModel, RankRewardModel
-from rm_dataprocess import rank_data_prepare,data_prepare,CustomDataset
+
 from copy import deepcopy
 from dataclasses import dataclass
 import inspect
@@ -37,8 +36,9 @@ from sklearn.metrics import mean_squared_error
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
 
-
-
+import sys
+sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
+from RLHF.reward.rm import RewardModel, RankRewardModel
 
 class RMTrainer():
     def __init__(self,args):
@@ -50,10 +50,10 @@ class RMTrainer():
 
 
         self.num_epochs=3
-        self.eval_steps=1000
-        self.save_steps=10000
-        self.batch_size=1
-        self.lr=0.001
+        self.eval_steps=50
+        self.save_steps=100
+        self.batch_size=16
+        self.lr=1e-5
 
 
 
@@ -65,21 +65,21 @@ class RMTrainer():
             self.tokenizer.unk_token = self.tokenizer.pad_token
 
 
-        bnb_config = BitsAndBytesConfig(
-            load_in_8bit=False,  # 不使用8bit
-            load_in_4bit=False,  # 不使用4bit
-            load_in_2bit=True,   # 启用 2-bit 量化
-            bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
-            bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
-        )
+        # bnb_config = BitsAndBytesConfig(
+        #     load_in_8bit=False,  # 不使用8bit
+        #     load_in_4bit=False,  # 不使用4bit
+        #     load_in_2bit=True,   # 启用 2-bit 量化
+        #     bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
+        #     bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
+        # )
         # bnb_config=None
 
         # 设置 LoRA 配置
         lora_config = LoraConfig(
-            r=1,  # Rank，越大表示 LoRA 层越大，消耗显存更多
-            lora_alpha=8,  # LoRA scaling factor
-            lora_dropout=0.1,  # Dropout 防止过拟合
-            target_modules=["q_proj", "v_proj"],  # 只训练注意力层
+            r=8,  # Rank，越大表示 LoRA 层越大，消耗显存更多
+            lora_alpha=16,  # LoRA scaling factor
+            lora_dropout=0.05,  # Dropout 防止过拟合
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],  # 只训练注意力层
             bias="none",
             # task_type="CAUSAL_LM"  # 适用于自回归（decoder-only）模型，如 Qwen
         )
@@ -87,9 +87,9 @@ class RMTrainer():
         self.model = RewardModel(self.pretrain_path,lora_config=lora_config).to(self.device)
 
         if self.use_wandb:
-            wandb.init(project="rlhf-reward-model", 
+            wandb.init(project="rlhf-reward-model-1.5b-16", 
                        name="reward-model-training", 
-                       dir="/home/wsy/NLP/RL/RLHF/reward",
+                       dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/reward",
                        config={
                             "model": self.model,
                             "lr": self.lr, 
@@ -114,11 +114,9 @@ class RMTrainer():
         ]
 
         data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True)
+        train_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(900)
 
-        
-        train_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(90000)
-
-        test_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(10000)
+        test_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).skip(900).take(100)
 
 
         
@@ -169,9 +167,7 @@ class RMTrainer():
                 for k, v in batch.items():
                     if isinstance(v, torch.Tensor):
                         batch[k] = v.to(self.device)
-                # print('====================================')
-                # print(batch)
-                
+
                 _, loss = self.model(batch["chosen_input_ids"], attention_mask=batch["chosen_attention_mask"], labels=batch["chosen_labels"])
 
                 loss.backward()
@@ -275,7 +271,6 @@ class RMTrainer():
                 print(f"diff:{diff}")
                 loss = loss + diff
                 counts += 1
-                print(loss)
         loss = loss / counts
         return -loss  # 要最大化分差，所以要取负数
 
@@ -311,18 +306,43 @@ class RMTrainer():
                 
         
         avg_loss = eval_loss / len(self.test_dataloader)
-        mse = mean_squared_error(all_chosen_labels, all_chosen_preds)
-        mse = mean_squared_error(all_rejected_labels, all_rejected_preds)
+        # print(all_chosen_labels)
+        # print(all_chosen_preds)
+        # exit()
+        mse=0
+        mse_chosen=0
+        mse_rejected=0
+        try:
+            mse_chosen = mean_squared_error(all_chosen_labels, all_chosen_preds)
+            mse+=mse_chosen
+            
+        except Exception as e:
+            print(e)
+            print(all_chosen_labels)
+            print(all_chosen_preds)
+            
+        try:
+            mse_rejected = mean_squared_error(all_rejected_labels, all_rejected_preds)
+            mse+=mse_rejected
+        except Exception as e:
+            print(e)
+            print(all_rejected_labels)
+            print(all_rejected_preds)
+        
+
         if self.use_wandb:
             wandb.log({
                 "avg_loss": avg_loss,
                 "mse": mse,
+                "mse_chosen": mse_chosen if mse_chosen>0 else -1 ,
+                "mse_rejected": mse_rejected if mse_rejected>0 else -1,
                 "all_chosen_preds":all_chosen_preds,
                 "all_chosen_preds":all_chosen_preds,
                 "all_rejected_preds":all_rejected_preds,
                 "all_rejected_preds":all_rejected_preds,
             })
         
+        print(f"Eval Loss: {avg_loss}, MSE: {mse}")
         return {"eval_loss": avg_loss, "eval_mse": mse}
 
 
@@ -331,7 +351,7 @@ class RMTrainer():
         # "我们去成都旅游，必须要去的地方是大熊猫繁殖基地。大熊猫是我国唯一的国家二级保护动物，是世界上保存最完整的动物种群之一，也是我国第一个国家级自然保护区。我们是四川省的首批国家重点保护野生动物和珍稀动物基金会的成员，被誉为中国动物保护的摇篮和世界生物多样性保护基地，被中国科学院、中华人民共和国国家林业局授予全国生态文明建设示范区称号，被国务院批准为国家森林城市、国际生态旅游目的地。熊猫基地位于成都市双流区东南部，是国家aaaa级旅游景区，国家地理标志保护单位。熊猫栖息地为亚热带或热带的高山",]
 
         self.model.eval()
-        data = self.tokenizer.batch_encode_plus(response_lst, max_length=256, padding="max_length", truncation=True,return_tensors='pt')
+        data = self.tokenizer.batch_encode_plus(response_lst, max_length=512, padding="max_length", truncation=True,return_tensors='pt')
         
         # 移动数据到设备
         for k, v in data.items():
@@ -359,8 +379,6 @@ class CustomDataset(Dataset):
         return len(self.sample['chosen_input_ids'])
 
 def data_prepare(tokenizer,data_lst,device):
-    # print("==========data prepare==========")
-    print(data_lst)
     train_data = {} 
 
 
@@ -369,8 +387,6 @@ def data_prepare(tokenizer,data_lst,device):
     chosen_score=[data['chosen_score']for data in data_lst]
     rejected_score=[data['rejected_score']for data in data_lst]
 
-    print(chosen_score)
-    print(rejected_score)
 
 
     chosen_data= tokenizer.batch_encode_plus(chosen_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt').to(device) 
@@ -397,14 +413,14 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-1.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/preference_dataset_mixture2_and_safe_pku/train.parquet')
+    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/datatset/preference_dataset_mixture2_and_safe_pku/train.parquet')
     # parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/hh_rlhf_cn/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
-    #outputs
-    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/reward/ckpt')
+    #outputsI
+    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/reward/ckpt')
 
 
     args=parser.parse_args()

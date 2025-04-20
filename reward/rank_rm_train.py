@@ -1,7 +1,5 @@
 import argparse
-import time
-from rm import  RankRewardModel
-from rm_dataprocess import rank_data_prepare,data_prepare,CustomDataset
+from rm import RewardModel, RankRewardModel
 from copy import deepcopy
 from dataclasses import dataclass
 import inspect
@@ -50,11 +48,11 @@ class RankRMTrainer():
         self.output_dir=args.output_dir
 
 
-        self.num_epochs=1
-        self.eval_steps=1
+        self.num_epochs=3
+        self.eval_steps=100
         self.save_steps=100
-        self.batch_size=2
-        self.lr=0.001
+        self.batch_size=8
+        self.lr=1e-5
 
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -76,10 +74,10 @@ class RankRMTrainer():
 
         # 设置 LoRA 配置
         lora_config = LoraConfig(
-            r=1,  # Rank，越大表示 LoRA 层越大，消耗显存更多
-            lora_alpha=8,  # LoRA scaling factor
+            r=8,  # Rank，越大表示 LoRA 层越大，消耗显存更多
+            lora_alpha=16,  # LoRA scaling factor
             lora_dropout=0.1,  # Dropout 防止过拟合
-            target_modules=["q_proj", "v_proj"],  # 只训练注意力层
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],  # 只训练注意力层
             bias="none",
             # task_type="CAUSAL_LM"  # 适用于自回归（decoder-only）模型，如 Qwen
         )
@@ -87,9 +85,9 @@ class RankRMTrainer():
         self.model = RankRewardModel(self.pretrain_path,lora_config=lora_config).to(self.device)
 
         if self.use_wandb:
-            wandb.init(project="rlhf-rank-reward-model", 
-                       name=f"rank-reward-model-training-{time.strftime('%Y%m%d-%H%M%S')}", 
-                       dir="/home/wsy/NLP/RL/RLHF/reward",
+            wandb.init(project="rlhf-rank-reward-model-1.5b-8", 
+                       name="rank-reward-model-training", 
+                       dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/reward",
                        config={
                             "model": self.model,
                             "lr": self.lr, 
@@ -97,7 +95,6 @@ class RankRMTrainer():
                             "batch_size": self.batch_size,
                             "eval_steps": self.eval_steps,
                             "save_steps": self.save_steps,
-                            "lr": self.lr,
                         })
 
 
@@ -114,9 +111,9 @@ class RankRMTrainer():
         ]
         
 
-        train_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(8)
+        train_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(900)
         # test_data=load_dataset("parquet", data_files=self.test_path,split='train',streaming=True).shuffle(seed=42).take(4)
-        test_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(4)
+        test_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(100)
 
 
 
@@ -222,6 +219,7 @@ class RankRMTrainer():
                 #     model_to_save.save_pretrained(os.path.join(self.output_dir, "best_rank_model"))
                 #     self.tokenizer.save_pretrained(os.path.join(self.output_dir, "best_rank_model"))
                 #     print(f"New best model with loss: {best_loss}")
+                #     wandb.log({"best_loss": best_loss, "global_step": global_step})
 
 
                 # 评估
@@ -267,7 +265,6 @@ class RankRMTrainer():
 
 
     def compute_loss(self,predict_rewards):
-        print("=============rank loss================")
         # predict_rewards的位置越前面的相对分越高
         # loss设置原因见：https://zhuanlan.zhihu.com/p/610147705
         loss, counts = torch.tensor([0]).to(self.device), 0
@@ -275,10 +272,8 @@ class RankRMTrainer():
         for i in range(len(predict_rewards) - 1):  # 遍历所有前项-后项的得分差
             for j in range(i + 1, len(predict_rewards)):
                 diff = nn.functional.logsigmoid(predict_rewards[i] - predict_rewards[j])  # sigmoid到0~1之间 log再全变成负的
-                print(f"diff:{diff}")
                 loss = loss + diff
                 counts += 1
-                print(loss)
         loss = loss / counts
         return -loss.sum()  # 要最大化分差，所以要取负数
 
@@ -289,48 +284,55 @@ class RankRMTrainer():
         print("==========Evaluate==========")
         self.model.eval()
         eval_loss = 0
-        all_chosen_preds = []
-        all_chosen_labels = []
-        all_rejected_preds=[]
-        all_rejected_labels=[]
-        
+        mse=0
+        all_chosen_loss=0
+        all_rejected_loss=0
+
         with torch.no_grad():
             for batch in tqdm(self.test_dataloader, desc="Evaluating"):
-                for k, v in batch.items():
-                    if isinstance(v, torch.Tensor):
-                        batch[k] = v.to(self.device)
+                # for k, v in batch.items():
+                #     if isinstance(v, torch.Tensor):
+                #         batch[k] = v.to(self.device)
+
+                chosen_input_ids=batch["chosen_input_ids"]
+                chosen_attention_mask=batch["chosen_attention_mask"]
+                rejected_input_ids=batch["rejected_input_ids"]
+                rejected_attention_mask=batch["rejected_attention_mask"]
+                chosen_reward = self.model(chosen_input_ids, attention_mask=chosen_attention_mask)
+                rejected_reward = self.model(rejected_input_ids, attention_mask=rejected_attention_mask)
+
+
+                reward_lst=[chosen_reward,rejected_reward]
+                
+                loss = self.compute_loss(reward_lst)
+                eval_loss+=loss.item()
                         
                 chosen_out, chosen_loss = self.model(batch["chosen_input_ids"], attention_mask=batch["chosen_attention_mask"], labels=batch["chosen_labels"])
-                eval_loss += chosen_loss.item()
+                all_chosen_loss += chosen_loss.item()
+                chosen_mse=mean_squared_error(chosen_out.squeeze().cpu().numpy().tolist(), batch["chosen_labels"].squeeze().cpu().numpy().tolist())
+                mse+=chosen_mse
 
                 rejected_out, rejected_loss = self.model(batch["rejected_input_ids"], attention_mask=batch["rejected_attention_mask"], labels=batch["rejected_labels"])
-                eval_loss += rejected_loss.item()
-
+                all_rejected_loss += rejected_loss.item()
+                rejected_mse=mean_squared_error(rejected_out.squeeze().cpu().numpy().tolist(), batch["rejected_labels"].squeeze().cpu().numpy().tolist())
+                mse+=rejected_mse
 
                 
-
-                # 因为 PyTorch 张量需要先转移到 CPU 上才能被转换为 NumPy 数组
-                all_chosen_preds.append(chosen_out.squeeze().cpu().numpy().tolist())
-                all_chosen_labels.append(batch["chosen_labels"].squeeze().cpu().numpy().tolist())
-
-                all_rejected_preds.append(rejected_out.squeeze().cpu().numpy().tolist())
-                all_rejected_labels.append(batch["rejected_labels"].squeeze().cpu().numpy().tolist())
                 
         
-        avg_loss = eval_loss / len(self.test_dataloader)
-        mse_chosen = mean_squared_error(all_chosen_labels, all_chosen_preds)
-        mse_rejected = mean_squared_error(all_rejected_labels, all_rejected_preds)
-        mse=mse_chosen+mse_rejected
+        avg_loss = (eval_loss / len(self.test_dataloader))/2
+        avg_chosen_loss = (all_chosen_loss / len(self.test_dataloader))/2
+        avg_rejected_loss = (all_rejected_loss / len(self.test_dataloader))/2
+        mse=(mse/len(self.test_dataloader))/2
+
         if self.use_wandb:
             wandb.log({
                 "avg_loss": avg_loss,
-                "mse": mse,
-                "all_chosen_preds":all_chosen_preds,
-                "all_chosen_preds":all_chosen_preds,
-                "all_rejected_preds":all_rejected_preds,
-                "all_rejected_preds":all_rejected_preds,
+                "avg_chosen_loss": avg_chosen_loss,
+                "avg_rejected_loss": avg_rejected_loss,
+                "mse": mse
             })
-        
+        print(f"Eval Loss = {avg_loss}, MSE = {mse}, avg_chosen_loss = {avg_chosen_loss}, avg_rejected_loss = {avg_rejected_loss}")
         return {"eval_loss": avg_loss, "eval_mse": mse}
 
 
@@ -370,7 +372,6 @@ class CustomDataset(Dataset):
 
 def data_prepare(tokenizer,data_lst,device):
     # print("==========data prepare==========")
-    print(data_lst)
     train_data = {} 
 
 
@@ -378,10 +379,6 @@ def data_prepare(tokenizer,data_lst,device):
     rejected_lst=[data['rejected']for data in data_lst]
     chosen_score=[data['chosen_score']for data in data_lst]
     rejected_score=[data['rejected_score']for data in data_lst]
-
-    print(chosen_score)
-    print(rejected_score)
-
 
     chosen_data= tokenizer.batch_encode_plus(chosen_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt').to(device) 
     rejected_data=tokenizer.batch_encode_plus(rejected_lst, max_length=512, padding="longest", truncation=True,return_tensors='pt').to(device) 
@@ -406,14 +403,14 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/preference_dataset_mixture2_and_safe_pku/train.parquet')
+    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/datatset/preference_dataset_mixture2_and_safe_pku/train.parquet')
     # parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/hh_rlhf_cn/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/reward/ckpt')
+    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/reward/rank_ckpt')
 
 
     args=parser.parse_args()

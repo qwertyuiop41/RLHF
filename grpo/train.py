@@ -43,14 +43,13 @@ from transformers import (
 
 
 import sys
-sys.path.append("/home/wsy/NLP/RL")
+sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
 
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
 from RLHF.reward.rm import RewardModel
 from RLHF.grpo.gms8k_reward import format_reward,correctness_reward
 from RLHF.grpo.kk import compute_score
-
 
 class GRPOTrainer():
     def __init__(self,args):
@@ -62,56 +61,62 @@ class GRPOTrainer():
 
 
         self.max_answer_seq_len=512
-        self.lr=0.001
-        self.save_freq=10
-        self.epoch=1
-        self.batch_size=2
-        self.num_generation=2
+        self.clip = 0.2 # As recommended by the paper
+        self.lr=1e-5
+        self.save_steps=200
+        self.eval_steps=50
+        self.gamma = 0.95 
+        self.epoch=3
+        self.kl_ctl=0.001
+        self.clip_reward_value = 5
+        self.batch_size=4
+        self.num_generation=4
         self.reward_mode="model" if args.reward_model else "rule"  #{"model","rule"}
         self.reward_fn="kk" #{"kk","gms8k"}
-        self.cliprange = 0.05
+        self.lam = 0.9
+        self.cliprange = 0.001
+        self.cliprange_value = 0.001
         self.best_reward = float('-inf')
         self.warmup_ratio=0.0
-        self.epsilon = 0.00001
+        self.epsilon = 0.00001  #veRL: 1e-6
         self.beta=0.01
-        self.grpo_iteration=args.grpo_iteration if args.grpo_iteration else 1
         
 
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
 
 
-        train_data=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(8)
-        test_data=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).take(4)
+        train_data=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(900)
+        test_data=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).take(100)
 
 
         
         self.tokenizer=AutoTokenizer.from_pretrained(pretrain_path)
         self.tokenizer.padding_side='left'
 
-        bnb_config = BitsAndBytesConfig(
-            load_in_8bit=False,  # 不使用8bit
-            load_in_4bit=False,  # 不使用4bit
-            load_in_2bit=True,   # 启用 2-bit 量化
-            bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
-            bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
-        )
-        # bnb_config=None
+        # bnb_config = BitsAndBytesConfig(
+        #     load_in_8bit=False,  # 不使用8bit
+        #     load_in_4bit=False,  # 不使用4bit
+        #     load_in_2bit=True,   # 启用 2-bit 量化
+        #     bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
+        #     bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
+        # )
+        bnb_config=None
 
 
         # 设置 LoRA 配置
         lora_config = LoraConfig(
-            r=1,  # Rank，越大表示 LoRA 层越大，消耗显存更多
-            lora_alpha=8,  # LoRA scaling factor
+            r=8,  # Rank，越大表示 LoRA 层越大，消耗显存更多
+            lora_alpha=16,  # LoRA scaling factor
             lora_dropout=0.1,  # Dropout 防止过拟合
-            target_modules=["q_proj", "v_proj"],  # 只训练注意力层
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],  # 只训练注意力层
             bias="none",
             # task_type="CAUSAL_LM"  # 适用于自回归（decoder-only）模型，如 Qwen
         )
 
 
         self.policy_model=PolicyModel(pretrain_path,lora_config,bnb_config=bnb_config).to(self.device)
-        # TODO 记得要把这里改回来
+
         self.ref_model=deepcopy(self.policy_model).to(self.device)
         # self.ref_model=self.policy_model
 
@@ -139,20 +144,28 @@ class GRPOTrainer():
         # 初始化wandb
         # if args.use_wandb:
         wandb.init(
-            project='rlhf-grpo',
+            project='rlhf-grpo-1.5b-8',
             name=f"grpo-{time.strftime('%Y%m%d-%H%M%S')}",
+            dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/grpo",
+            sync_tensorboard=True,
             config={
                 "policy_model": self.policy_model,
+                "lora_config": lora_config,
                 "reward": self.reward,
                 "max_answer_seq_len": self.max_answer_seq_len,
+                "clip": self.clip,
                 "lr": self.lr,
-                "save_freq": self.save_freq,
+                "save_steps": self.save_steps,
+                "eval_steps": self.eval_steps,
+                "gamma": self.gamma,
                 "epoch": self.epoch,
+                "kl_ctl": self.kl_ctl,
+                "clip_reward_value": self.clip_reward_value,
                 "batch_size": self.batch_size,
                 "reward_mode": self.reward_mode,
+                "lam": self.lam,
                 "cliprange": self.cliprange,
-                "num_generation":self.num_generation,
-                "grpo_iteration":self.grpo_iteration,
+                "cliprange_value": self.cliprange_value
             }
         )
 
@@ -192,6 +205,7 @@ class GRPOTrainer():
         grpo on policy
         """
         print("==============grpo learn==============")
+        global_step=0
         self.policy_model.train()
         for i in range(self.epoch):
 
@@ -200,9 +214,10 @@ class GRPOTrainer():
                 desc=f"Train epoch [{i + 1}/{self.epoch}]",
             )
 
-
+            
             policy_loss_sum, reward_sum = 0, 0
             batch_count = 0
+            
             self.policy_optimizer.zero_grad()
 
             for batch in pbar:
@@ -212,48 +227,62 @@ class GRPOTrainer():
                 """
                 prepared_inputs=self.prepare_inputs(batch)
                 rwd_score=torch.tensor(prepared_inputs["rewards"])
-                print(f"rwd_score:{rwd_score}")
+                policy_loss=self.step(prepared_inputs)
+                self.policy_optimizer.step()
+                self.policy_lr_scheduler.step()
+                self.policy_optimizer.zero_grad()
+                policy_loss_sum += policy_loss.item()
+
+                reward_sum += rwd_score.sum().item()
+                batch_count += 1
+                global_step += 1
+                
+                # 更新进度条信息
+                pbar.set_postfix({
+                    'policy_loss': policy_loss.item(),
+                    'reward': rwd_score.float().mean().item()
+                })
+                
+                # 记录到wandb
                 wandb.log({
-                    "reward": rwd_score.float.mean().item(),
+                    "policy_loss": policy_loss.item(),
+                    "reward": rwd_score.float().mean().item(),
+                    "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
                 })
 
-                for i in range(self.grpo_iteration):
-                    policy_loss=self.step(prepared_inputs)
-                    policy_loss_sum += policy_loss.item()
+                # 定期保存模型
+                if global_step > 0 and global_step % self.save_steps == 0:
+                    self.save_checkpoint(f"checkpoint-steps-{global_step}")
 
-                    batch_count += 1
-                    
-                    # 更新进度条信息
-                    pbar.set_postfix({
-                        'policy_loss': policy_loss.item(),
-                        'reward': rwd_score.float().mean().item
-                    })
-                    
-                    # 记录到wandb
-                    wandb.log({
-                        "policy_loss": policy_loss.item(),
-                        "reward": rwd_score.float().mean().item(),
-                        "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
-                    })
+                
 
-
+                if global_step > 0 and global_step % self.eval_steps == 0:
+                    # 在测试集上评估
+                    test_reward = self.evaluate()
+                    # 保存最佳模型
+                    if test_reward > self.best_reward:
+                        self.best_reward = test_reward
+                        self.save_checkpoint("best_model")
+                        print(f"New best model with reward: {test_reward:.4f}")
 
             avg_policy_loss = policy_loss_sum / max(1, batch_count)
+            avg_reward = reward_sum / max(1, batch_count)
 
-            print(f"Epoch {i+1}/{self.epoch} - Avg Policy Loss: {avg_policy_loss:.4f}")
+            print(f"Epoch {i+1}/{self.epoch} - Avg Policy Loss: {avg_policy_loss:.4f}, Avg Reward: {avg_reward:.4f}")
             
             # 记录到wandb
             if self.use_wandb:
                 wandb.log({
                     "epoch": i+1,
                     "avg_policy_loss": avg_policy_loss,
+                    "avg_reward": avg_reward,
                 })
 
             # 在测试集上评估
             test_reward = self.evaluate()
             
             # 保存模型
-            if (i+1) % self.save_freq == 0 or i == self.epoch - 1:
+            if (i+1) % self.save_steps == 0 or i == self.epoch - 1:
                 self.save_checkpoint(f"checkpoint-epoch-{i+1}")
             
             # 保存最佳模型
@@ -278,44 +307,28 @@ class GRPOTrainer():
         input_ids=batch["input_ids"]
         prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
 
+        with torch.no_grad():
             
-        # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
-        if self.grpo_iteration>1:
-            with torch.no_grad():
-                
-                # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
+            # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
 
-                seq = self.policy_model.model.generate(
-                    batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    max_length=self.max_answer_seq_len,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    )
-
-                seq_mask = seq.not_equal(pad_token_id).long()
-                outputs=self.policy_model(seq, attention_mask=seq_mask)
-                outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
-
-            
-        else:
             seq = self.policy_model.model.generate(
-                    batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    max_length=self.max_answer_seq_len,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    )
+                batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                max_length=self.max_answer_seq_len,
+                pad_token_id=self.tokenizer.pad_token_id,
+                )
 
             seq_mask = seq.not_equal(pad_token_id).long()
+            completions =self.get_completion(seq, input_ids, self.tokenizer)
+            
+        
             outputs=self.policy_model(seq, attention_mask=seq_mask)
             outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
-
-        completions =self.get_completion(seq, input_ids, self.tokenizer)
-        rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,completions=completions,labels=batch["labels"])
-
-        print(f"rwd_score:{rwd_score}")
-        adv=self.compute_adv(rwd_score)
-        print(f"adv:{adv}")
-        
+            rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,completions=completions,labels=batch["labels"])
+            # print(f"rwd_score:{rwd_score}")
+            adv=self.compute_adv(rwd_score)
+            # print(f"adv:{adv}")
+            
 
         logits = outputs.logits
         logits_ref = outputs_ref.logits
@@ -347,11 +360,9 @@ class GRPOTrainer():
         Returns:
             list: 包含 completion 字符串的列表。
         """
-        print("=============get completions===========")
         completions = []
         completions_mask=[]
         batch_size = seq.size(0)
-        print(batch_size)
 
         for i in range(batch_size):
             # 获取当前样本的 prompt 长度
@@ -371,7 +382,8 @@ class GRPOTrainer():
         """
         单步更新
         """
-        
+        # train the rlhf mode here
+        ### process the old outputs
         prompts = prepared_inputs['prompts']
         log_probs = prepared_inputs['logprobs']
         ref_log_probs = prepared_inputs['ref_logprobs']
@@ -383,24 +395,22 @@ class GRPOTrainer():
         start = prompts.size()[-1] - 1
         # #因为第一个token是输入
         action_mask = attention_mask[:, 1:]
-        if self.grpo_iteration>1:
-            #需要再次采样，等于是off policy
-            # # 确保只有生成部分的有效 token 参与训练，忽略 padding 部分。
-            # ends = start +attention_mask[:, start+1:].sum(1)-1
-            batch = {'input_ids': seq, "attention_mask": attention_mask}
+        # 确保只有生成部分的有效 token 参与训练，忽略 padding 部分。
+        ends = start +attention_mask[:, start+1:].sum(1)-1
 
-            policy_prob = self.policy_model(**batch).logits
-            policy_log_prob = gather_log_probs(policy_prob[:, :-1, :], seq[:, 1:])
-            print("policy_log_prob.requires_grad:", policy_log_prob.requires_grad)
-            policy_loss = self.compute_loss(policy_log_prob[:, start:],
-                                            log_probs[:, start:], ref_log_probs[:, start:],
-                                            action_mask[:, start:],adv)
-        else:
-            # 如果grpo_iteration=1,则不需要有ratio=1，且不需要再次采样，等于是on policy
-            print("log_probs.requires_grad:", log_probs.requires_grad)
-            policy_loss = self.compute_loss(log_probs[:, start:],
-                                            log_probs[:, start:].detach(), ref_log_probs[:, start:],
-                                            action_mask[:, start:],adv)
+
+        batch = {'input_ids': seq, "attention_mask": attention_mask}
+
+        policy_prob = self.policy_model(**batch).logits
+        
+            
+            
+
+        policy_log_prob = gather_log_probs(policy_prob[:, :-1, :], seq[:, 1:])
+        print("policy_log_prob.requires_grad:", policy_log_prob.requires_grad)
+        policy_loss = self.compute_loss(policy_log_prob[:, start:],
+                                        log_probs[:, start:], ref_log_probs[:, start:],
+                                        action_mask[:, start:],adv)
         policy_loss.backward()
         # # self.policy_model.backward(policy_loss)
         self.policy_optimizer.step()
@@ -416,7 +426,6 @@ class GRPOTrainer():
         奖励是sentence-level的，奖励是标量值。
         """
         print('========compute reward score=======')
-        print(self.reward_mode)
         size=seq.shape[0]
         if self.reward=="model":
             with torch.no_grad():
@@ -429,37 +438,18 @@ class GRPOTrainer():
                     rewards=rwd_fn(completions,labels) 
                     rwd_score = [r1 + r2 for r1, r2 in zip(rwd_score, rewards)]
             elif self.reward_fn=="kk":
-                print(seq.shape)
-                print(labels.shape)
                 rwd_score=[]
-
-                
+            
                 for s, g in zip(seq,labels):
-                    # print(s)
                     seq_text = self.tokenizer.decode(s, skip_special_tokens=True)
 
-                    target = "assistant\nLet me solve this step by step"
+                    gt_text=self.tokenizer.decode(g, skip_special_tokens=True)
+                    ground_truth=json.loads(gt_text)
 
-                    # 分割字符串
-                    parts = seq_text.split(target, 1)  
-
-                    # 获取目标短语后面的内容
-                    if len(parts) > 1:
-                        solution_str = parts[1].strip()  # 去除前后空格
-                        print(solution_str)
-                        gt_text=self.tokenizer.decode(g, skip_special_tokens=True)
-                        ground_truth=json.loads(gt_text)
-
-                        score=compute_score(solution_str,ground_truth)
-                        rwd_score.append([score])
-
-                    else:
-                        print("没找到answer")
-                        rwd_score.append([0])
+                    score=compute_score(seq_text,ground_truth)
+                    rwd_score.append([score])
             rwd_score=torch.tensor(rwd_score).to(device=self.device)
-            print(rwd_score)
             return rwd_score
-
     
         
 
@@ -467,13 +457,11 @@ class GRPOTrainer():
         """
         根据reward score计算advantage
         包含过程监督强化学习+GRPO 和 结果监督强化学习+GRPO 两种方式
-        Ai,t=(ri-mean(r))/std(r), t对应token-level优势，即一个句子中，每个token对应的优势是一样的。
-        这种方式的好处在于，估计都是从真实的环境reward计算得来，而不是通过价值估计计算而得。
+        Ai,t=(ri-mean(r))/std(r), t对应token-level优势，即一个句子中，每个token对应的优势是一样的。这种方式的好处在于，估计都是从真实的环境reward计算得来，而不是通过价值估计计算而得。
         """
-        print(rewards)
+        
         rewards = torch.tensor(rewards, dtype = torch.float).to(self.device)
         A = (rewards - rewards.mean()) / (rewards.std() + self.epsilon)
-        print(A.shape)
         return A
 
 
@@ -486,24 +474,21 @@ class GRPOTrainer():
         GRPO KL是token-level的
         GRPO并没有在奖励中添加KL惩罚，而是通过直接将训练策略和参考策略之间的KL散度添加到损失函数中来进行正则化,从而避免了使得𝐴^𝑖,𝑡的计算变得复杂
         当前策略如果和ref策略接近，则kl接近0，loss可能是负数
-
-
-        if self.grpo_iteration=1，则ratio=1，可以简化下面的部分计算为：
-        loss=torch.exp(old_log_probs - old_log_probs.detach()) * adv
-        
         """
         print(f"===========compute loss=========")
+        len_oi=mask[:, ].sum(1)
         
         # kl
         kl=ref_log_probs.exp() / log_probs.exp()- (ref_log_probs - log_probs) - 1
-        ratio=torch.exp(log_probs - old_log_probs)
-        print(ratio)
+        ratio=torch.exp(ref_log_probs - old_log_probs)
         adv=adv.unsqueeze(dim = 1)  # [a, b ,c] -> [[a], [b], [c]]
         loss1=ratio*adv
         loss2=reward_clip = torch.clamp(ratio, 1.0 - self.cliprange,
                                   1.0 + self.cliprange)*adv
-        loss= -(torch.minimum(loss1,loss2)-self.beta*kl)
-        loss = (loss * mask).sum() / mask.sum()
+        loss=(torch.minimum(loss1,loss2)-self.beta*kl)*mask
+        loss=-(1/self.num_generation)*(1/len_oi.unsqueeze(dim = 1))*loss
+        loss = loss.sum()
+
         return loss
 
 
@@ -543,8 +528,8 @@ class GRPOTrainer():
                     seq_mask = seq.not_equal(self.tokenizer.pad_token_id).long()
                     
                     # 计算奖励分数
-                    reward = self.compute_reward_score(seq, attention_mask=seq_mask)
-                    total_reward += reward.mean().item()
+                    reward = self.compute_reward_score(seq, attention_mask=seq_mask,completions=None, labels=batch["labels"])
+                    total_reward += reward.float().mean().item()
                     
                     # 解码生成的回答
                     generations = self.tokenizer.batch_decode(seq, skip_special_tokens=True)
@@ -596,7 +581,6 @@ class GRPOTrainer():
         # 保存训练配置
         with open(checkpoint_dir / "training_args.json", 'w') as f:
             json.dump(self.__dict__, f, ensure_ascii=False, indent=4, default=str)
-
         
         print(f"Model checkpoint saved to {checkpoint_dir}")
 
@@ -667,17 +651,15 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/Logic-RL/data/kk/instruct/3ppl/train.parquet')
-    
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/Logic-RL/data/kk/instruct/3ppl/test.parquet')
+    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/train.parquet')
+    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/outputs/kk/')
+    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/outputs/kk/')
     parser.add_argument("--reward_model", default=None)
-    parser.add_argument("--grpo_iteration", default=1)
 
 
     args=parser.parse_args()
@@ -687,11 +669,6 @@ if __name__=="__main__":
     print(f"device:{device}")
 
     args.device=device
-
-    
-    args.grpo_iteration=1
-
-
     args.reward_fn=[format_reward,correctness_reward]
 
     grpoTrainer=GRPOTrainer(args)
