@@ -1,1 +1,0 @@
-{"policy_loss": 2.2501969851873582e-06, "reward": -3, "learning_rate": 0, "_timestamp": 1742970313.5225053, "_runtime": 33.277489175, "_step": 3, "epoch": 1, "avg_policy_loss": 1.1250984925936791e-06, "avg_reward": -48, "test_reward": 0}
