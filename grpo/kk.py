@@ -11,8 +11,8 @@ def extract_solution(solution_str: str) -> Tuple[Optional[str], str]:
         Tuple containing (extracted_answer, processed_string)
     """
     # Split response to isolate assistant output
-    if "Assistant:" in solution_str:
-        processed_str = solution_str.split("Assistant:", 1)[1]
+    if "assistant\n" in solution_str:
+        processed_str = solution_str.split("assistant\n", 1)[1]
     elif "<|im_start|>assistant" in solution_str:
         processed_str = solution_str.split("<|im_start|>assistant", 1)[1]
     else:
@@ -140,7 +140,7 @@ def validate_response_structure(processed_str: str) -> bool:
 
 def compute_score(solution_str: str, 
                  ground_truth: Dict[str, str],
-                 format_reward: int = 1,
+                 format_reward: int = 0.1,
                  answer_reward: float = 1.0) :
     """Computes comprehensive score for model response.
     

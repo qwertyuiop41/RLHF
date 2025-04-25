@@ -1,4 +1,5 @@
 import argparse
+import random
 from rm import RewardModel, RankRewardModel
 from copy import deepcopy
 from dataclasses import dataclass
@@ -49,7 +50,7 @@ class RankRMTrainer():
 
 
         self.num_epochs=3
-        self.eval_steps=100
+        self.eval_steps=50
         self.save_steps=100
         self.batch_size=8
         self.lr=1e-5
@@ -199,18 +200,18 @@ class RankRMTrainer():
                         "epoch": epoch,
                         "global_step": global_step,
                     })
-                # 定期保存模型
-                if global_step > 0 and global_step % self.save_steps == 0:
-                    checkpoint_dir = os.path.join(self.output_dir, f"rank-checkpoint-{global_step}")
-                    os.makedirs(checkpoint_dir, exist_ok=True)
-                    model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
-                    model_to_save.save_pretrained(checkpoint_dir)
-                    self.tokenizer.save_pretrained(checkpoint_dir)
+                # # 定期保存模型
+                # if global_step > 0 and global_step % self.save_steps == 0:
+                #     checkpoint_dir = os.path.join(self.output_dir, f"rank-checkpoint-{global_step}")
+                #     os.makedirs(checkpoint_dir, exist_ok=True)
+                #     model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
+                #     model_to_save.save_pretrained(checkpoint_dir)
+                #     self.tokenizer.save_pretrained(checkpoint_dir)
                     
-                    # 保存优化器状态
-                    torch.save(self.optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
-                    torch.save(self.lr_scheduler.state_dict(), os.path.join(checkpoint_dir, "scheduler.pt"))
-                    print(f"Saved checkpoint at step {global_step}")
+                #     # 保存优化器状态
+                #     torch.save(self.optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
+                #     torch.save(self.lr_scheduler.state_dict(), os.path.join(checkpoint_dir, "scheduler.pt"))
+                #     print(f"Saved checkpoint at step {global_step}")
                 
                 # # 更新当前最佳模型
                 # if loss.item() < best_loss:
@@ -223,7 +224,7 @@ class RankRMTrainer():
 
 
                 # 评估
-                if global_step > 0 and global_step % self.eval_steps == 0:
+                if global_step >= 0 and global_step % self.eval_steps == 0:
                     eval_results = self.evaluate()
                     print(f"Step {global_step}: Eval Loss = {eval_results['eval_loss']}, MSE = {eval_results['eval_mse']}")
                     
@@ -274,8 +275,10 @@ class RankRMTrainer():
                 diff = nn.functional.logsigmoid(predict_rewards[i] - predict_rewards[j])  # sigmoid到0~1之间 log再全变成负的
                 loss = loss + diff
                 counts += 1
-        loss = loss / counts
-        return -loss.sum()  # 要最大化分差，所以要取负数
+        # loss = loss / counts
+        # # sum()是对所有的loss求和，return的loss会比较大，且受batch_size影响，可能训练没那么稳定
+        # return -loss.sum()  # 要最大化分差，所以要取负数
+        return -loss.mean() 
 
 
     def evaluate(self):
@@ -290,9 +293,9 @@ class RankRMTrainer():
 
         with torch.no_grad():
             for batch in tqdm(self.test_dataloader, desc="Evaluating"):
-                # for k, v in batch.items():
-                #     if isinstance(v, torch.Tensor):
-                #         batch[k] = v.to(self.device)
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch[k] = v.to(self.device)
 
                 chosen_input_ids=batch["chosen_input_ids"]
                 chosen_attention_mask=batch["chosen_attention_mask"]
@@ -303,27 +306,28 @@ class RankRMTrainer():
 
 
                 reward_lst=[chosen_reward,rejected_reward]
-                
+                # 这个loss是pairwise loss
                 loss = self.compute_loss(reward_lst)
                 eval_loss+=loss.item()
                         
-                chosen_out, chosen_loss = self.model(batch["chosen_input_ids"], attention_mask=batch["chosen_attention_mask"], labels=batch["chosen_labels"])
-                all_chosen_loss += chosen_loss.item()
-                chosen_mse=mean_squared_error(chosen_out.squeeze().cpu().numpy().tolist(), batch["chosen_labels"].squeeze().cpu().numpy().tolist())
-                mse+=chosen_mse
+                # # 这里的loss之绝对值的MSELoss
+                # chosen_out, chosen_loss = self.model(batch["chosen_input_ids"], attention_mask=batch["chosen_attention_mask"], labels=batch["chosen_labels"])
+                # all_chosen_loss += chosen_loss.item()
+                # chosen_mse=mean_squared_error(chosen_out.squeeze().cpu().numpy().tolist(), batch["chosen_labels"].squeeze().cpu().numpy().tolist())
+                # mse+=chosen_mse
 
-                rejected_out, rejected_loss = self.model(batch["rejected_input_ids"], attention_mask=batch["rejected_attention_mask"], labels=batch["rejected_labels"])
-                all_rejected_loss += rejected_loss.item()
-                rejected_mse=mean_squared_error(rejected_out.squeeze().cpu().numpy().tolist(), batch["rejected_labels"].squeeze().cpu().numpy().tolist())
-                mse+=rejected_mse
+                # rejected_out, rejected_loss = self.model(batch["rejected_input_ids"], attention_mask=batch["rejected_attention_mask"], labels=batch["rejected_labels"])
+                # all_rejected_loss += rejected_loss.item()
+                # rejected_mse=mean_squared_error(rejected_out.squeeze().cpu().numpy().tolist(), batch["rejected_labels"].squeeze().cpu().numpy().tolist())
+                # mse+=rejected_mse
 
                 
                 
         
-        avg_loss = (eval_loss / len(self.test_dataloader))/2
-        avg_chosen_loss = (all_chosen_loss / len(self.test_dataloader))/2
-        avg_rejected_loss = (all_rejected_loss / len(self.test_dataloader))/2
-        mse=(mse/len(self.test_dataloader))/2
+        avg_loss = (eval_loss / len(self.test_dataloader))
+        avg_chosen_loss = (all_chosen_loss / len(self.test_dataloader))
+        avg_rejected_loss = (all_rejected_loss / len(self.test_dataloader))
+        mse=(mse/len(self.test_dataloader))
 
         if self.use_wandb:
             wandb.log({
@@ -393,12 +397,21 @@ def data_prepare(tokenizer,data_lst,device):
 
     return train_data
 
-
+def set_seed(seed=42):
+    random.seed(seed)  # Python 内置的随机数生成器
+    np.random.seed(seed)  # NumPy 的随机数生成器
+    torch.manual_seed(seed)  # PyTorch 的 CPU 随机种子
+    torch.cuda.manual_seed(seed)  # PyTorch 的 GPU 随机种子（单卡）
+    torch.cuda.manual_seed_all(seed)  # PyTorch 的 GPU 随机种子（多卡）
+    torch.backends.cudnn.deterministic = True  # 让 cudnn 以确定性模式运行
+    torch.backends.cudnn.benchmark = False  # 关闭 benchmark，保证可复现性
 
 
 if __name__=="__main__":
     os.environ["WANDB_MODE"] = "offline"
     parser = argparse.ArgumentParser()
+    set_seed(42)
+
 
     
 

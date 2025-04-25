@@ -113,7 +113,7 @@ class RMTrainer():
             },
         ]
 
-        data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True)
+        # data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True)
         train_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).take(900)
 
         test_data=load_dataset("parquet", data_files=self.train_path,split='train',streaming=True).shuffle(seed=42).skip(900).take(100)

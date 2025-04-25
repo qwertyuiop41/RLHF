@@ -1,6 +1,8 @@
 import argparse
+import random
 import re
 import time
+import numpy
 import torch
 import torch.nn as nn
 from torch.utils.data import  DataLoader,Dataset
@@ -80,7 +82,7 @@ class DPOTrainer():
 
 
         train_data=load_dataset("parquet", data_files=train_path,split='train',streaming=True).shuffle(seed=42).take(300)
-        test_data=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).skip(300).take(30)
+        test_data=load_dataset("parquet", data_files=test_path,split='train',streaming=True).shuffle(seed=42).take(30)
 
         
         self.tokenizer=AutoTokenizer.from_pretrained(pretrain_path)
@@ -139,7 +141,7 @@ class DPOTrainer():
             name=f"dpo-{time.strftime('%Y%m%d-%H%M%S')}",
             dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/dpo",
             config={
-                "policy_model": self.policy_model,
+                "policy_model": args.pretrain_path,
                 "lora_config": lora_config,
                 "max_answer_seq_len": self.max_answer_seq_len,
                 "lr": self.lr,
@@ -309,7 +311,7 @@ class DPOTrainer():
                                     gather_log_probs(policy_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])[:, start:],
                                     gather_log_probs(ref_chosen_logits[:, :-1, :], chosen_input_ids[:, 1:])[:, start:],
                                     gather_log_probs(ref_rejected_logits[:, :-1, :], rejected_input_ids[:, 1:])[:, start:])
-        print(loss)
+      
         loss.backward()
         self.policy_optimizer.step()
         self.policy_lr_scheduler.step()
@@ -475,6 +477,15 @@ def data_prepare(tokenizer,data_lst,device):
 
 
 
+def set_seed(seed=42):
+    random.seed(seed)  # Python 内置的随机数生成器
+    numpy.random.seed(seed)  # NumPy 的随机数生成器
+    torch.manual_seed(seed)  # PyTorch 的 CPU 随机种子
+    torch.cuda.manual_seed(seed)  # PyTorch 的 GPU 随机种子（单卡）
+    torch.cuda.manual_seed_all(seed)  # PyTorch 的 GPU 随机种子（多卡）
+    torch.backends.cudnn.deterministic = True  # 让 cudnn 以确定性模式运行
+    torch.backends.cudnn.benchmark = False  # 关闭 benchmark，保证可复现性
+    
 
 
 
@@ -482,6 +493,8 @@ def data_prepare(tokenizer,data_lst,device):
 if __name__=="__main__":
     os.environ["WANDB_MODE"] = "offline"
     parser = argparse.ArgumentParser()
+
+    set_seed(42)        
     
 
     # Models

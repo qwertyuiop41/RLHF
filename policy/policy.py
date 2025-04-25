@@ -6,15 +6,17 @@ from transformers import get_scheduler,AutoTokenizer,PreTrainedModel,AutoModel,A
 from peft import get_peft_model
 
 class PolicyModel(Qwen2PreTrainedModel):
-    def __init__(self, pretrain_path,lora_config,bnb_config=None):
+    def __init__(self, pretrain_path,lora_config=None,bnb_config=None):
         config=AutoConfig.from_pretrained(pretrain_path)
         super(PolicyModel, self).__init__(config)
         self.config = config
-        if bnb_config:
+        self.loss_fn = nn.MSELoss()
+        if bnb_config is not None:
             self.model = AutoModelForCausalLM.from_pretrained(pretrain_path,quantization_config=bnb_config)
         else:
-            self.model = AutoModelForCausalLM.from_pretrained(pretrain_path)
-        self.model=get_peft_model(self.model,lora_config)
+            self.model= AutoModelForCausalLM.from_pretrained(pretrain_path)
+        if lora_config:
+            self.model=get_peft_model(self.model,lora_config)
 
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.model(input_ids=input_ids,

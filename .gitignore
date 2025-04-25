@@ -8,3 +8,5 @@ reward/wandb2
 *.tar
 *.log
 train
+*.jsonl
+*.parquet

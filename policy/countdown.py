@@ -6,9 +6,9 @@ import operator
 
 def extract_solution(solution_str):
     """Extract the equation from the solution string."""
-    # Remove everything before the first "Assistant:"
-    if "Assistant:" in solution_str:
-        solution_str = solution_str.split("Assistant:", 1)[1]
+    # Remove everything before the first "assistant\n"
+    if "assistant\n" in solution_str:
+        solution_str = solution_str.split("assistant\n", 1)[1]
     elif "<|im_start|>assistant" in solution_str:
         solution_str = solution_str.split("<|im_start|>assistant", 1)[1]
     else:
@@ -70,7 +70,8 @@ def compute_score(solution_str, ground_truth, method='strict', format_score=0.1,
     numbers = ground_truth['numbers']
     
     equation = extract_solution(solution_str=solution_str)
-    do_print = random.randint(1, 64) == 1
+    # do_print = random.randint(1, 64) == 1
+    do_print = True
     
     if do_print:
         print(f"--------------------------------")
