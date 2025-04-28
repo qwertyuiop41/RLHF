@@ -47,10 +47,10 @@ from transformers import (
 import sys
 
 
-from RLHF.policy.policy import PolicyModel
-from RLHF.policy.value import ValueModel
-from RLHF.reward.rm import RewardModel
-from RLHF.grpo.kk  import compute_score
+from policy.policy import PolicyModel
+from policy.value import ValueModel
+from reward.rm import RewardModel
+from grpo.kk  import compute_score
 
 
 class PPOTrainer():

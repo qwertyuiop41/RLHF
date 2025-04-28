@@ -38,7 +38,7 @@ from peft import LoraConfig, get_peft_model
 
 import sys
 
-from RLHF.reward.rm import RewardModel, RankRewardModel
+from reward.rm import RewardModel, RankRewardModel
 
 class RMTrainer():
     def __init__(self,args):

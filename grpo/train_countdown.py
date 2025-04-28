@@ -45,13 +45,12 @@ from transformers import (
 
 
 import sys
-
-
-from RLHF.policy.policy import PolicyModel
-from RLHF.policy.value import ValueModel
-from RLHF.reward.rm import RewardModel
-from RLHF.grpo.gms8k_reward import format_reward,correctness_reward
-from RLHF.policy.countdown import compute_score
+sys.path.append('./')
+from policy.policy import PolicyModel
+from policy.value import ValueModel
+from reward.rm import RewardModel
+from grpo.gms8k_reward import format_reward,correctness_reward
+from policy.countdown import compute_score
 
 class GRPOTrainer():
     def __init__(self,args):
