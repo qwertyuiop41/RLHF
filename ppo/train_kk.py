@@ -45,12 +45,11 @@ from transformers import (
 
 
 import sys
-
-
-from policy.policy import PolicyModel
-from policy.value import ValueModel
+sys.path.append('./')
+from ppo.policy import PolicyModel
+from ppo.value import ValueModel
 from reward.rm import RewardModel
-from policy.countdown import compute_score
+from grpo.kk import compute_score
 
 
 class PPOTrainer():
@@ -73,15 +72,16 @@ class PPOTrainer():
         if self.tokenizer.unk_token is None:
             self.tokenizer.unk_token = self.tokenizer.pad_token
         
-        self.max_answer_seq_len=512
+        self.max_answer_seq_len=1024
         self.lr=1e-6
         # self.save_steps=200
-        self.eval_steps=25
+        self.eval_steps=50
         self.gamma = 1.0   # 之前0.95
         self.epoch=2
         self.kl_ctl=0.001   # openrlhf 0.01
         self.clip_reward_value = 1
-        self.batch_size=8
+        self.batch_size=2
+        self.test_batch_size=16
         self.lam = 1.0 #之前0.9
         self.cliprange = 0.001
         self.cliprange_value = 0.5  #之前0.001
@@ -96,8 +96,8 @@ class PPOTrainer():
         # 初始化wandb
         # if args.use_wandb:
         wandb.init(
-            project=f'rlhf-ppo-1.5b-No_Distribution_Shift',
-            name=f"ppo-{time.strftime('%Y%m%d-%H%M%S')}-1.5b",
+            project=f'rlhf-ppo-3b-kk',
+            name=f"ppo-{time.strftime('%Y%m%d-%H%M%S')}",
             dir="policy",
             config={
                 "policy_model": args.pretrain_path,
@@ -112,6 +112,7 @@ class PPOTrainer():
                 "epoch": self.epoch,
                 "kl_ctl": self.kl_ctl,
                 "clip_reward_value": self.clip_reward_value,
+                "test_batch_size":self.test_batch_size,
                 "batch_size": self.batch_size,
                 "reward_mode": self.reward_mode,
                 "lam": self.lam,
@@ -209,7 +210,6 @@ class PPOTrainer():
             outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
 
             rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,gt=gt)
-            print(rwd_score)
             # values 估计的是当前 token 未来的累积奖励,所以不需要最后一个
             # 评论模型 critic_model 返回结果维度是(B,L)，L 维度上第 i 个位置代表从 i 位置到最后的累积奖励，用于辅助评估策略的好坏，舍去最后一个位置的 token
             # 价值函数  V(t) 是基于当前状态评估未来的期望回报，但最后一个 token 通常没有后续的未来信息，因此它的价值估计没有意义。
@@ -748,8 +748,8 @@ def train(args):
     train_dataset=data_prepare(tokenizer,train_dataset,device)
     test_dataset=data_prepare(tokenizer,test_dataset,device)
 
-    train_dataloader=DataLoader(dataset=CustomDataset(train_dataset),shuffle=False,batch_size=8)
-    test_dataloader=DataLoader(dataset=CustomDataset(test_dataset),shuffle=False,batch_size=8)
+    train_dataloader=DataLoader(dataset=CustomDataset(train_dataset),shuffle=True,batch_size=2)
+    test_dataloader=DataLoader(dataset=CustomDataset(test_dataset),shuffle=False,batch_size=16)
 
 
     ppo=PPOTrainer(policy_model=policy,value_model=value,reward_model=None,
@@ -774,17 +774,15 @@ if __name__=="__main__":
 
     set_seed()
 
-    
-
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/models/Qwen2.5-3B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/train.parquet')
-    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/test.parquet')
+    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/train.parquet')
+    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='outputs/countdown')
+    parser.add_argument("--output_dir", default='outputs/ppo/kk')
 
 
     args=parser.parse_args()

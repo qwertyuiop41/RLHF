@@ -1,3 +1,6 @@
+# 和train.py同一个脚本只是训练的数据集不一样
+# 在数据集countdown上的训练
+
 import argparse
 import random
 import re
@@ -46,11 +49,11 @@ from transformers import (
 
 import sys
 sys.path.append('./')
-from policy.policy import PolicyModel
-from policy.value import ValueModel
+from ppo.policy import PolicyModel
+from ppo.value import ValueModel
 from reward.rm import RewardModel
 from grpo.gms8k_reward import format_reward,correctness_reward
-from policy.countdown import compute_score
+from ppo.countdown import compute_score
 
 class GRPOTrainer():
     def __init__(self,args):

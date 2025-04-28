@@ -45,12 +45,11 @@ from transformers import (
 
 
 import sys
-
-
-from policy.policy import PolicyModel
-from policy.value import ValueModel
+sys.path.append('./')
+from ppo.policy import PolicyModel
+from ppo.value import ValueModel
 from reward.rm import RewardModel
-from grpo.kk  import compute_score
+from ppo.countdown import compute_score
 
 
 class PPOTrainer():
@@ -73,21 +72,21 @@ class PPOTrainer():
         if self.tokenizer.unk_token is None:
             self.tokenizer.unk_token = self.tokenizer.pad_token
         
-        self.max_answer_seq_len=1600
-        self.lr=1e-5
-        self.save_steps=200
-        self.eval_steps=50
+        self.max_answer_seq_len=512
+        self.lr=1e-6
+        # self.save_steps=200
+        self.eval_steps=25
         self.gamma = 1.0   # 之前0.95
         self.epoch=2
-        self.experience_epoch=1
         self.kl_ctl=0.001   # openrlhf 0.01
         self.clip_reward_value = 1
-        self.batch_size=4
+        self.batch_size=8
         self.lam = 1.0 #之前0.9
         self.cliprange = 0.001
         self.cliprange_value = 0.5  #之前0.001
         self.best_reward = float('-inf')
         self.warmup_ratio=0.0
+        self.ppo_epoch=1
         
 
         self.output_dir = Path(args.output_dir)
@@ -96,7 +95,7 @@ class PPOTrainer():
         # 初始化wandb
         # if args.use_wandb:
         wandb.init(
-            project=f'rlhf-ppo-1.5b-{self.batch_size}',
+            project=f'rlhf-ppo-1.5b-No_Distribution_Shift',
             name=f"ppo-{time.strftime('%Y%m%d-%H%M%S')}-1.5b",
             dir="policy",
             config={
@@ -106,7 +105,7 @@ class PPOTrainer():
                 "reward_model": self.reward_model if self.reward_mode=="model" else "rule",
                 "max_answer_seq_len": self.max_answer_seq_len,
                 "lr": self.lr,
-                "save_steps": self.save_steps,
+                # "save_steps": self.save_steps,
                 "eval_steps":self.eval_steps,
                 "gamma": self.gamma,
                 "epoch": self.epoch,
@@ -172,67 +171,71 @@ class PPOTrainer():
         self.policy_optimizer=torch.optim.Adam(self.policy_model.parameters(),lr=self.lr)
         self.value_optimizer=torch.optim.Adam(self.value_model.parameters(),lr=self.lr)
 
-    def generate_experience(self):
+
+
+
+    def generate_experience(self,batch):
         """
         重要性采样
         """
         self.eval()
-        pbar = tqdm(
-            self.train_dataloader,
-            desc=f"Experience",
-        )
-        experiences=[]
-        for batch in pbar:
-            # 将数据移到相应设备
-            for k, v in batch.items():
-                if isinstance(v, torch.Tensor):
-                    batch[k] = v.to(self.device)
-                    
-            pad_token_id = self.tokenizer.pad_token_id
-            input_ids=batch["input_ids"]
-            gt=batch["labels"]
-            prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
 
-            with torch.no_grad():
+        # 将数据移到相应设备
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                batch[k] = v.to(self.device)
                 
-                # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
+        pad_token_id = self.tokenizer.pad_token_id
+        input_ids=batch["input_ids"]
+        gt=batch["labels"]
+        prompt=self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]
 
-                seq = self.policy_model.model.generate(
-                    batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    max_length=self.max_answer_seq_len,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    )
-
-                                        
-                seq_mask = seq.not_equal(pad_token_id).long()
+        with torch.no_grad():
             
-                outputs=self.policy_model(seq, attention_mask=seq_mask)
-                outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
+            # sanitize_input_ids(self.tokenizer,batch["input_ids"],self.tokenizer.vocab_size)
 
-                rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,gt=gt)
-                # values 估计的是当前 token 未来的累积奖励,所以不需要最后一个
-                # 评论模型 critic_model 返回结果维度是(B,L)，L 维度上第 i 个位置代表从 i 位置到最后的累积奖励，用于辅助评估策略的好坏，舍去最后一个位置的 token
-                # 价值函数  V(t) 是基于当前状态评估未来的期望回报，但最后一个 token 通常没有后续的未来信息，因此它的价值估计没有意义。
-                # 而且生成任务是自回归的，序列的最后一个 token 不会为后续步骤提供任何预测依据，因为生成已经结束。
-                values=self.value_model(seq,attention_mask=seq_mask)[:, :-1]
+            seq = self.policy_model.model.generate(
+                batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                max_length=self.max_answer_seq_len,
+                pad_token_id=self.tokenizer.pad_token_id,
+                )
 
-            logits = outputs.logits
-            logits_ref = outputs_ref.logits
+                                    
+            seq_mask = seq.not_equal(pad_token_id).long()
+        
+            outputs=self.policy_model(seq, attention_mask=seq_mask)
+            outputs_ref=self.ref_model(seq, attention_mask=seq_mask)
+
+            rwd_score=self.compute_reward_score(seq,attention_mask=seq_mask,gt=gt)
+            print(rwd_score)
+            # values 估计的是当前 token 未来的累积奖励,所以不需要最后一个
+            # 评论模型 critic_model 返回结果维度是(B,L)，L 维度上第 i 个位置代表从 i 位置到最后的累积奖励，用于辅助评估策略的好坏，舍去最后一个位置的 token
+            # 价值函数  V(t) 是基于当前状态评估未来的期望回报，但最后一个 token 通常没有后续的未来信息，因此它的价值估计没有意义。
+            # 而且生成任务是自回归的，序列的最后一个 token 不会为后续步骤提供任何预测依据，因为生成已经结束。
+            values=self.value_model(seq,attention_mask=seq_mask)[:, :-1]
+
+        logits = outputs.logits
+        logits_ref = outputs_ref.logits
 
 
-            experience={
-                'prompts': input_ids,
-                'logprobs': gather_log_probs(logits[:, :-1, :], seq[:, 1:]),
-                'ref_logprobs': gather_log_probs(logits_ref[:, :-1, :], seq[:,1:]),
-                'value': values,
-                'rewards': rwd_score,
-                'input_ids': seq,
-                "attention_mask": seq_mask,
-            }
-            experiences.append(experience)
-        return experiences
-    
+        experience={
+            'prompts': input_ids,
+            'logprobs': gather_log_probs(logits[:, :-1, :], seq[:, 1:]),
+            'ref_logprobs': gather_log_probs(logits_ref[:, :-1, :], seq[:,1:]),
+            'value': values,
+            'rewards': rwd_score,
+            'input_ids': seq,
+            "attention_mask": seq_mask,
+        }
+        return experience
+
+
+
+
+
+
+
     def eval(self):
         self.policy_model.eval()
         self.value_model.eval()
@@ -252,10 +255,8 @@ class PPOTrainer():
             # TODO 也不用整个train loader的experience一次性传入，可以一部分一部分的传入
             # 重要性采样是off-policy采样，需要乘以重要性权重个重要性权重p(x)/q(x)
             # 如果要on-policy则每次更新model后都重新采样
-            if i%self.experience_epoch==0:
-                experiences=self.generate_experience()
             pbar = tqdm(
-                experiences,
+                self.train_dataloader,
                 desc=f"Train epoch [{i + 1}/{self.epoch}]",
             )
             policy_loss_sum, value_loss_sum, reward_sum = 0, 0, 0
@@ -266,39 +267,41 @@ class PPOTrainer():
 
             
             
-            for experience in pbar:
-                rwd_score=experience["rewards"]
-                policy_loss, value_loss, adv=self.step(experience=experience)
-                policy_loss_sum += policy_loss.item()
-                value_loss_sum += value_loss.item()
-                reward_sum += rwd_score.sum().item()
-                total_seq_length+=experience["input_ids"].shape[1]
-                total_adv+=adv.float().mean().item()
-                
-                
-                # 更新进度条信息
-                pbar.set_postfix({
-                    'policy_loss': policy_loss.item(),
-                    'value_loss': value_loss.item(),
-                    'reward': rwd_score.float().sum().item()
-                })
-                seq_length=experience["input_ids"].shape[1]
-                # 记录到wandb
-                wandb.log({
-                    "policy_loss": policy_loss.item(),
-                    "value_loss": value_loss.item(),
-                    "reward": rwd_score.float().sum().item(),
-                    "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
-                    "seq_length": seq_length,
-                    "advantages": adv.float().mean().item(),
-                })
-                print(f"policy_loss:{policy_loss.item()},value_loss:{value_loss.item()},reward:{rwd_score.float().sum().item()},seq_length:{seq_length}, adv:{adv.float().mean().item()}")
+            for batch in pbar:
+                experience=self.generate_experience(batch)
 
-                
-                
-                # # 定期保存模型
-                # if global_step > 0 and global_step % self.save_steps == 0:
-                #     self.save_checkpoint(f"checkpoint-epoch-{global_step}")
+                for i in range(self.ppo_epoch):
+
+                    rwd_score=experience["rewards"]
+                    policy_loss, value_loss, adv=self.step(experience=experience)
+                    policy_loss_sum += policy_loss.item()
+                    value_loss_sum += value_loss.item()
+                    reward_sum += rwd_score.sum().item()
+                    total_seq_length+=experience["input_ids"].shape[1]
+                    total_adv+=adv.float().mean().item()
+                    
+                    
+                    
+                    # 更新进度条信息
+                    pbar.set_postfix({
+                        'policy_loss': policy_loss.item(),
+                        'value_loss': value_loss.item(),
+                        'reward': rwd_score.float().sum().item()
+                    })
+                    seq_length=experience["input_ids"].shape[1]
+                    # 记录到wandb
+                    wandb.log({
+                        "policy_loss": policy_loss.item(),
+                        "value_loss": value_loss.item(),
+                        "reward": rwd_score.float().sum().item(),
+                        "learning_rate": self.policy_lr_scheduler.get_last_lr()[0],
+                        "seq_length": seq_length,
+                        "advantages": adv.float().mean().item(),
+                    })
+                    print(f"policy_loss:{policy_loss.item()},value_loss:{value_loss.item()},reward:{rwd_score.float().sum().item()},seq_length:{seq_length}, adv:{adv.float().mean().item()}")
+
+                    
+        
 
                 
 
@@ -314,6 +317,8 @@ class PPOTrainer():
 
                 batch_count += 1
                 global_step+=1
+
+
 
 
 
@@ -657,8 +662,8 @@ def data_prepare(tokenizer,data_lst,device):
 
     gt_lst=[json.dumps(data["reward_model"]["ground_truth"])for data in data_lst]
 
-    train_data = tokenizer.batch_encode_plus(question_lst, max_length=400, padding="longest", truncation=True,return_tensors='pt').to(device) 
-    label_data = tokenizer.batch_encode_plus(gt_lst, max_length=400, padding="longest", truncation=True, return_tensors='pt').to(device) 
+    train_data = tokenizer.batch_encode_plus(question_lst, max_length=1024, padding="longest", truncation=True,return_tensors='pt').to(device) 
+    label_data = tokenizer.batch_encode_plus(gt_lst, max_length=1024, padding="longest", truncation=True, return_tensors='pt').to(device) 
 
     train_data["labels"] = label_data["input_ids"]
 
@@ -771,14 +776,14 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/models/Qwen2.5-3B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/train.parquet')
-    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/test.parquet')
+    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/train.parquet')
+    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='outputs/ppo/kk')
+    parser.add_argument("--output_dir", default='outputs/countdown')
 
 
     args=parser.parse_args()

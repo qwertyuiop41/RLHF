@@ -37,8 +37,7 @@ from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
 
 import sys
-
-from reward.rm import RewardModel, RankRewardModel
+sys.path.append('./')from reward.rm import RewardModel, RankRewardModel
 
 class RMTrainer():
     def __init__(self,args):

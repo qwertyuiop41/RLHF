@@ -47,8 +47,8 @@ from transformers import (
 import sys
 sys.path.append('./')
 
-from policy.policy import PolicyModel
-from policy.value import ValueModel
+from ppo.policy import PolicyModel
+from ppo.value import ValueModel
 from reward.rm import RewardModel
 from grpo.gms8k_reward import format_reward,correctness_reward
 from grpo.kk import compute_score
