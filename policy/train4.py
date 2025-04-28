@@ -43,7 +43,7 @@ from transformers import (
 
 
 import sys
-sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
+
 
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
@@ -645,13 +645,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PPO Training for Language Models")
     
     # 模型参数
-    parser.add_argument("--pretrain", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct',
+    parser.add_argument("--pretrain", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct',
                       help="预训练模型的路径")
     
     # 数据集参数
-    parser.add_argument("--train_dataset_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/dataset/spider/train.parquet',
+    parser.add_argument("--train_dataset_path", default='dataset/spider/train.parquet',
                       help="训练数据集路径")
-    parser.add_argument("--test_dataset_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/dataset/spider/test.parquet',
+    parser.add_argument("--test_dataset_path", default='dataset/spider/test.parquet',
                       help="测试数据集路径")
     parser.add_argument("--train_samples", type=int, default=12, help="训练样本数量")
     parser.add_argument("--test_samples", type=int, default=4, help="测试样本数量")

@@ -22,7 +22,7 @@ def make_prefix(dp, template_type):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--local_dir', default='/home/wsy/NLP/RL/RLHF/dataset')
+    parser.add_argument('--local_dir', default='dataset')
     parser.add_argument('--dataset_name', default='xlangai/spider')
     parser.add_argument('--train_size', type=int, default=None)
     parser.add_argument('--test_size', type=int, default=None)

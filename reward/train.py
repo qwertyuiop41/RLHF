@@ -230,4 +230,4 @@ def predict(model_path):
 
 
 if __name__=="__main__":
-    train(pretrain_path='/home/wsy/NLP/RL/Qwen2.5-0.5B-Instruct',save_path='/home/wsy/NLP/RL/RLHF/reward/ckpt')
+    train(pretrain_path='/home/wsy/NLP/RL/Qwen2.5-0.5B-Instruct',save_path='reward/ckpt')

@@ -4,9 +4,12 @@ policy/test.py
 outputs
 wandb
 dataset
+datasets
 reward/wandb2
 *.tar
 *.log
 train
 *.jsonl
 *.parquet
+grpo/wandb2
+grpo/wandb3

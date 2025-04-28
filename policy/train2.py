@@ -45,7 +45,7 @@ from transformers import (
 
 
 import sys
-sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
+
 
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
@@ -98,7 +98,7 @@ class PPOTrainer():
         wandb.init(
             project=f'rlhf-ppo-1.5b-{self.batch_size}-No_Distribution_Shift',
             name=f"ppo-{time.strftime('%Y%m%d-%H%M%S')}-1.5b",
-            dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/policy",
+            dir="policy",
             config={
                 "policy_model": args.pretrain_path,
                 "value_model": self.value_model,
@@ -817,14 +817,14 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
     parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/train.parquet')
     parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/outputs/countdown')
+    parser.add_argument("--output_dir", default='outputs/countdown')
 
 
     args=parser.parse_args()

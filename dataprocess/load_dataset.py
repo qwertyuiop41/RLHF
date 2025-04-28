@@ -4,6 +4,6 @@ from datasets import load_dataset
 dataset = load_dataset("OpenRLHF/preference_dataset_mixture2_and_safe_pku", split="train")
 
 # 保存为 JSON Lines 格式
-# dataset.to_json("/home/wsy/NLP/RL/OpenRLHF/openrlhf/datasets/preference_dataset_mixture2_and_safe_pku.jsonl")
+# dataset.to_json("datasets/preference_dataset_mixture2_and_safe_pku.jsonl")
 
-dataset.to_parquet('/home/wsy/NLP/RL/OpenRLHF/openrlhf/datasets/preference_dataset_mixture2_and_safe_pku.parquet')
+dataset.to_parquet('datasets/preference_dataset_mixture2_and_safe_pku.parquet')

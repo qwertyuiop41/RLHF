@@ -45,7 +45,7 @@ def make_preference(dp, template_type):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--local_dir', default='/home/wsy/NLP/RL/RLHF/dataset')
+    parser.add_argument('--local_dir', default='dataset')
     parser.add_argument('--dataset_name', default='dikw/hh_rlhf_cn')
     parser.add_argument('--template_type', type=str, default='qwen-instruct')
 

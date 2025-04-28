@@ -45,7 +45,7 @@ from transformers import (
 
 
 import sys
-sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
+
 
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
@@ -148,7 +148,7 @@ class GRPOTrainer():
         wandb.init(
             project=f'rlhf-grpo',
             name=f"grpo-{time.strftime('%Y%m%d-%H%M%S')}-{self.batch_size}-countdown",
-            dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/grpo",
+            dir="grpo",
             sync_tensorboard=True,
             config={
                 "policy_model": args.pretrain_path,
@@ -786,14 +786,14 @@ if __name__=="__main__":
 
     # Models
     parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/models/Qwen2.5-3B-Instruct')
-    # parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct')
+    # parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
     parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/train.parquet')
     parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/outputs/grpo/countdown/')
+    parser.add_argument("--output_dir", default='outputs/grpo/countdown/')
     parser.add_argument("--reward_model", default=None)
 
 

@@ -45,7 +45,7 @@ from transformers import (
 
 
 import sys
-sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
+
 
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
@@ -139,7 +139,7 @@ class DPOTrainer():
         wandb.init(
             project='rlhf-dpo-1.5b-4',
             name=f"dpo-{time.strftime('%Y%m%d-%H%M%S')}",
-            dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/dpo",
+            dir="dpo",
             config={
                 "policy_model": args.pretrain_path,
                 "lora_config": lora_config,
@@ -498,14 +498,14 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/luoqi/models/Qwen/Qwen2.5-1.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/datatset/hh_rlhf_cn/train.parquet')
-    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/datatset/hh_rlhf_cn/test.parquet')
+    parser.add_argument("--train_path",default='datatset/hh_rlhf_cn/train.parquet')
+    parser.add_argument("--test_path", default='datatset/hh_rlhf_cn/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/outputs/hh_rlhf_cn/')
+    parser.add_argument("--output_dir", default='outputs/hh_rlhf_cn/')
     parser.add_argument("--reward_model", default=None)
 
 

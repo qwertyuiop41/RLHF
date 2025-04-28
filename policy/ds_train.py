@@ -693,12 +693,12 @@ if __name__=="__main__":
     # Models
     parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/home/wsy/NLP/RL/RLHF/dataset/spider/train.parquet')
-    parser.add_argument("--test_path", default='/home/wsy/NLP/RL/RLHF/dataset/spider/test.parquet')
+    parser.add_argument("--train_path",default='dataset/spider/train.parquet')
+    parser.add_argument("--test_path", default='dataset/spider/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/home/wsy/NLP/RL/RLHF/spider/outputs')
+    parser.add_argument("--output_dir", default='spider/outputs')
 
 
     args=parser.parse_args()

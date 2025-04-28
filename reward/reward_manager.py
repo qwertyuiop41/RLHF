@@ -225,11 +225,11 @@ if __name__=="__main__":
 
 
     # Checkpoint
-    parser.add_argument("--save_path", type=str, default="/home/wsy/NLP/RL/RLHF/reward/ckpt")
+    parser.add_argument("--save_path", type=str, default="reward/ckpt")
     parser.add_argument("--save_steps", type=int, default=-1)
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--eval_steps", type=int, default=-1)
-    parser.add_argument("--ckpt_path", type=str, default="/home/wsy/NLP/RL/RLHF/reward/ckpt/checkpoints_rm")
+    parser.add_argument("--ckpt_path", type=str, default="reward/ckpt/checkpoints_rm")
     parser.add_argument("--max_ckpt_num", type=int, default=3)
     parser.add_argument("--max_ckpt_mem", type=int, default=1e8)
     parser.add_argument("--load_checkpoint", action="store_true", default=False)
@@ -268,8 +268,8 @@ if __name__=="__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
     # Dataset
-    parser.add_argument("--train_dataset_path",default='/home/wsy/NLP/RL/RLHF/datatset/spider/train.parquet')
-    parser.add_argument("--test_dataset_path", default='/home/wsy/NLP/RL/RLHF/datatset/spider/test.parquet')
+    parser.add_argument("--train_dataset_path",default='datatset/spider/train.parquet')
+    parser.add_argument("--test_dataset_path", default='datatset/spider/test.parquet')
 
 
     # wandb.init(

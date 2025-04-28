@@ -45,7 +45,7 @@ from transformers import (
 
 
 import sys
-sys.path.append("/HOME/sustc_yqzhang/sustc_yqzhang_1/sy")
+
 
 from RLHF.policy.policy import PolicyModel
 from RLHF.policy.value import ValueModel
@@ -98,7 +98,7 @@ class PPOTrainer():
         wandb.init(
             project=f'rlhf-ppo-1.5b-{self.batch_size}',
             name=f"ppo-{time.strftime('%Y%m%d-%H%M%S')}-1.5b",
-            dir="/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/policy",
+            dir="policy",
             config={
                 "policy_model": args.pretrain_path,
                 "value_model": self.value_model,
@@ -778,7 +778,7 @@ if __name__=="__main__":
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/RLHF/outputs/ppo/kk')
+    parser.add_argument("--output_dir", default='outputs/ppo/kk')
 
 
     args=parser.parse_args()
