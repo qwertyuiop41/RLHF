@@ -1,6 +1,6 @@
 import argparse
 import random
-from rm import RewardModel, RankRewardModel
+from rm import RankRewardModel
 from copy import deepcopy
 from dataclasses import dataclass
 import inspect
@@ -416,7 +416,7 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
     parser.add_argument("--train_path",default='dataset/preference_dataset_mixture2_and_safe_pku/train.parquet')
     # parser.add_argument("--test_path", default='dataset/hh_rlhf_cn/test.parquet')

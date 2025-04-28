@@ -37,16 +37,8 @@ class RewardModel(Qwen2PreTrainedModel):
         last_rewards = logits[batch_indices, -1]  # 获取对应的 reward
 
         if labels is not None:
-            post_rewards=[]
-            for reward,label in zip(last_rewards,labels):
-                if label>10 and label<=100:
-                    reward = reward* 100
-                elif label<=10:
-                    reward = reward * 10
-                post_rewards.append(reward)
-            post_rewards=torch.tensor(post_rewards).to(last_rewards.device)
-            loss = self.loss_fn(post_rewards, labels)
-            return post_rewards, loss
+            loss = self.loss_fn(last_rewards, labels)
+            return last_rewards, loss
         else:
             return last_rewards
         
@@ -81,22 +73,7 @@ class RankRewardModel(Qwen2PreTrainedModel):
         logits = self.model(input_ids=input_ids,attention_mask=attention_mask).logits
         # print(logits)
         return logits
-        batch_indices = torch.arange(logits.shape[0])  # 生成 batch 索引
-        # reward应该取最后一位token对应的分数
-        rewards = logits[batch_indices, -1]  # 获取对应的 reward
 
-        if labels is not None:
-            # post_rewards=[]
-            # for reward,label in zip(rewards,labels):
-            #     if label>10 and label<=100:
-            #         reward = reward* 100
-            #     elif label<=10:
-            #         reward = reward * 10
-            #     post_rewards.append(reward)
-            # post_rewards=torch.tensor(post_rewards).to(rewards.device)
-            loss = self.loss_fn(rewards, labels)
-            return rewards, loss
-        return rewards
 
             
             
