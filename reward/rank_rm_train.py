@@ -64,14 +64,14 @@ class RankRMTrainer():
             self.tokenizer.unk_token = self.tokenizer.pad_token
 
 
-        bnb_config = BitsAndBytesConfig(
-            load_in_8bit=False,  # 不使用8bit
-            load_in_4bit=False,  # 不使用4bit
-            load_in_2bit=True,   # 启用 2-bit 量化
-            bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
-            bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
-        )
-        # bnb_config=None
+        # bnb_config = BitsAndBytesConfig(
+        #     load_in_8bit=False,  # 不使用8bit
+        #     load_in_4bit=False,  # 不使用4bit
+        #     load_in_2bit=True,   # 启用 2-bit 量化
+        #     bnb_2bit_compute_dtype=torch.float16,  # 计算时使用 float16
+        #     bnb_2bit_quant_type="nf2"  # `nf2` 量化格式，适用于 LLM
+        # )
+        bnb_config=None
 
         # 设置 LoRA 配置
         lora_config = LoraConfig(
