@@ -415,7 +415,7 @@ if __name__=="__main__":
     # Models
     parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='datatset/preference_dataset_mixture2_and_safe_pku/train.parquet')
+    parser.add_argument("--train_path",default='dataset/preference_dataset_mixture2_and_safe_pku/train.parquet')
     # parser.add_argument("--test_path", default='dataset/hh_rlhf_cn/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)

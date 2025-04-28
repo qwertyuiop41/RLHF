@@ -268,8 +268,8 @@ if __name__=="__main__":
     parser.add_argument("--adam_betas", type=float, nargs=2, default=(0.9, 0.95), help="Betas for Adam optimizer")
 
     # Dataset
-    parser.add_argument("--train_dataset_path",default='datatset/spider/train.parquet')
-    parser.add_argument("--test_dataset_path", default='datatset/spider/test.parquet')
+    parser.add_argument("--train_dataset_path",default='dataset/spider/train.parquet')
+    parser.add_argument("--test_dataset_path", default='dataset/spider/test.parquet')
 
 
     # wandb.init(
