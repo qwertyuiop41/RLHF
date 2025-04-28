@@ -45,12 +45,14 @@ from transformers import (
 
 
 import sys
+sys.path.append("./")
 
 
-from RLHF.policy.policy import PolicyModel
-from RLHF.policy.value import ValueModel
-from RLHF.reward.rm import RewardModel
-from RLHF.grpo.gms8k_reward import format_reward,correctness_reward
+# from policy.policy import PolicyModel
+from policy.policy import PolicyModel
+from policy.value import ValueModel
+from reward.rm import RewardModel
+from grpo.gms8k_reward import format_reward,correctness_reward
 
 
 
@@ -491,6 +493,19 @@ def set_seed(seed=42):
 
 
 if __name__=="__main__":
+    # import torch
+    # print(torch.cuda.is_available())  # 应该是 True
+    # print(torch.cuda.device_count())  # 应该 >= 1
+    # print(torch.cuda.get_device_name(0))  # 打印设备名
+
+    # exit()
+
+
+
+
+
+
+
     os.environ["WANDB_MODE"] = "offline"
     parser = argparse.ArgumentParser()
 
@@ -498,10 +513,10 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-1.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='datatset/hh_rlhf_cn/train.parquet')
-    parser.add_argument("--test_path", default='datatset/hh_rlhf_cn/test.parquet')
+    parser.add_argument("--train_path",default='dataset/hh_rlhf_cn/train.parquet')
+    parser.add_argument("--test_path", default='dataset/hh_rlhf_cn/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
