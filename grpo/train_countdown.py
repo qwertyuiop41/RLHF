@@ -45,13 +45,13 @@ from transformers import (
 
 
 import sys
-sys.path.append('./')
 
-from policy.policy import PolicyModel
-from policy.value import ValueModel
-from reward.rm import RewardModel
-from grpo.gms8k_reward import format_reward,correctness_reward
-from grpo.kk import compute_score
+
+from RLHF.policy.policy import PolicyModel
+from RLHF.policy.value import ValueModel
+from RLHF.reward.rm import RewardModel
+from RLHF.grpo.gms8k_reward import format_reward,correctness_reward
+from RLHF.policy.countdown import compute_score
 
 class GRPOTrainer():
     def __init__(self,args):
@@ -62,15 +62,15 @@ class GRPOTrainer():
         self.use_wandb=args.use_wandb
 
 
-        self.max_answer_seq_len=512  #3b Model 1024; 1.5b Model 1600
+        self.max_answer_seq_len=1600  
         self.lr=1e-5
         self.save_steps=200
         self.eval_steps=50
         self.gamma = 1.0  #原本0.95 verl 1.0
-        self.epoch=2
+        self.epoch=1
         self.kl_ctl=0.001
         self.clip_reward_value = 1.0
-        self.batch_size=2
+        self.batch_size=1
         self.test_batch_size=16
         self.num_generation=3
         self.reward_mode="model" if args.reward_model else "rule"  #{"model","rule"}
@@ -146,8 +146,8 @@ class GRPOTrainer():
         # 初始化wandb
         # if args.use_wandb:
         wandb.init(
-            project='rlhf-grpo',
-            name=f"grpo-{time.strftime('%Y%m%d-%H%M%S')}",
+            project=f'rlhf-grpo',
+            name=f"grpo-{time.strftime('%Y%m%d-%H%M%S')}-{self.batch_size}-countdown",
             dir="grpo",
             sync_tensorboard=True,
             config={
@@ -785,15 +785,15 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/models/Qwen2.5-3B-Instruct')
     # parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='../Logic-RL/data/kk/instruct/3ppl/train.parquet')
-    parser.add_argument("--test_path", default='../Logic-RL/data/kk/instruct/3ppl/test.parquet')
+    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/train.parquet')
+    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/TinyZero/data/countdown/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
-    parser.add_argument("--output_dir", default='outputs/kk/')
+    parser.add_argument("--output_dir", default='outputs/grpo/countdown/')
     parser.add_argument("--reward_model", default=None)
 
 

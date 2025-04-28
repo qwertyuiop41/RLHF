@@ -1,3 +1,7 @@
+# 模仿verl中的GRPO实现，将kl直接加在reward上，在得到adv和loss进行训练
+# 提出的GRPO算法中应该是直接将kl加在loss上(通过reward和adv获得loss)
+
+
 import argparse
 from collections import defaultdict
 import random
@@ -46,13 +50,14 @@ from transformers import (
 
 
 import sys
+sys.path.append('./')
 
 
-from RLHF.policy.policy import PolicyModel
-from RLHF.policy.value import ValueModel
-from RLHF.reward.rm import RewardModel
-from RLHF.grpo.gms8k_reward import format_reward,correctness_reward
-from RLHF.grpo.kk import compute_score
+from policy.policy import PolicyModel
+from policy.value import ValueModel
+from reward.rm import RewardModel
+from grpo.gms8k_reward import format_reward,correctness_reward
+from grpo.kk import compute_score
 
 class GRPOTrainer():
     def __init__(self,args):
@@ -851,10 +856,10 @@ if __name__=="__main__":
     
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/train.parquet')
-    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/test.parquet')
+    parser.add_argument("--train_path",default='../Logic-RL/data/kk/instruct/3ppl/train.parquet')
+    parser.add_argument("--test_path", default='../Logic-RL/data/kk/instruct/3ppl/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs
