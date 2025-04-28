@@ -300,10 +300,7 @@ class PPOTrainer():
                     })
                     print(f"policy_loss:{policy_loss.item()},value_loss:{value_loss.item()},reward:{rwd_score.float().sum().item()},seq_length:{seq_length}, adv:{adv.float().mean().item()}")
 
-                    
-        
 
-                
 
                 if global_step % self.eval_steps == 0:
                     # 在测试集上评估
