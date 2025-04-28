@@ -775,10 +775,10 @@ if __name__=="__main__":
     set_seed()
 
     # Models
-    parser.add_argument("--pretrain_path", type=str, default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/models/Qwen2.5-3B-Instruct')
+    parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-3B-Instruct')
     # Dataset
-    parser.add_argument("--train_path",default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/train.parquet')
-    parser.add_argument("--test_path", default='/HOME/sustc_yqzhang/sustc_yqzhang_1/sy/Logic-RL/data/kk/instruct/3ppl/test.parquet')
+    parser.add_argument("--train_path",default='../Logic-RL/data/kk/instruct/3ppl/train.parquet')
+    parser.add_argument("--test_path", default='../Logic-RL/data/kk/instruct/3ppl/test.parquet')
     #wandb
     parser.add_argument("--use_wandb", default=True)
     #outputs

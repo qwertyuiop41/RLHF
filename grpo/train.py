@@ -786,7 +786,7 @@ if __name__=="__main__":
 
     # Models
     parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-0.5B-Instruct')
-    # parser.add_argument("--pretrain_path", type=str, default='models/Qwen/Qwen2.5-1.5B-Instruct')
+    # parser.add_argument("--pretrain_path", type=str, default='Qwen/Qwen2.5-1.5B-Instruct')
     # Dataset
     parser.add_argument("--train_path",default='../Logic-RL/data/kk/instruct/3ppl/train.parquet')
     parser.add_argument("--test_path", default='../Logic-RL/data/kk/instruct/3ppl/test.parquet')
