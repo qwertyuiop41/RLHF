@@ -14,3 +14,4 @@ train
 grpo/wandb2
 grpo/wandb3
 policy/wandb2
+*.zip
